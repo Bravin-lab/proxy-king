@@ -830,26 +830,26 @@ else
   echo "[INFO] 3proxy is already installed"
 fi
 
-# Ensure 3proxy systemd service exists
-if [[ ! -f /etc/systemd/system/3proxy.service ]]; then
-  cat > /etc/systemd/system/3proxy.service <<'EOF'
+# Ensure 3proxy systemd service exists and is up to date
+cat > /etc/systemd/system/3proxy.service <<'EOF'
 [Unit]
 Description=3proxy proxy server
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-Type=simple
-ExecStart=/usr/local/bin/3proxy -n -c /etc/3proxy/3proxy.cfg
+Type=forking
+ExecStart=/usr/local/bin/3proxy /etc/3proxy/3proxy.cfg
 ExecReload=/bin/kill -HUP $MAINPID
 KillMode=process
 Restart=always
 RestartSec=5
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
 EOF
-  systemctl daemon-reload
-fi
+systemctl daemon-reload
 
 if [[ "$HARDEN_OS" == "1" ]]; then
   apply_os_hardening "$DISABLE_IPV6_ON_HARDEN"
@@ -1166,7 +1166,9 @@ systemctl restart 3proxy
 if systemctl is-active --quiet 3proxy; then
   echo "[INFO] 3proxy is running."
 else
-  echo "[ERROR] 3proxy failed to start. Check: systemctl status 3proxy"
+  echo "[ERROR] 3proxy failed to start. Showing diagnostics..."
+  systemctl --no-pager -l status 3proxy || true
+  journalctl -u 3proxy -n 40 --no-pager || true
   exit 1
 fi
 
