@@ -38,6 +38,57 @@ Run interactive terminal UI:
 sudo bash proxy_ui.sh
 ```
 
+## End-to-End VPS Setup
+
+Use this exact flow on a fresh Ubuntu VPS.
+
+1. Clone repository and set executable permissions.
+
+```bash
+git clone <your-repo-url>
+cd "proxy script"
+chmod +x setup_3proxy.sh proxy_ui.sh
+```
+
+2. Check target port range before creation.
+
+```bash
+sudo bash setup_3proxy.sh --port-range-check 10000 20
+```
+
+3. Create your first proxy batch.
+
+```bash
+sudo bash setup_3proxy.sh 20 10000 user socks5 "*" auto --harden-os
+```
+
+4. Verify services are running.
+
+```bash
+systemctl status 3proxy --no-pager
+systemctl status 3proxy-expiry-check.timer --no-pager
+```
+
+5. Validate proxy health.
+
+```bash
+sudo bash setup_3proxy.sh --health-check
+```
+
+6. Use routine operations as needed.
+
+```bash
+# Rotate all passwords
+sudo bash setup_3proxy.sh --rotate-passwords
+
+# Add one user
+sudo bash setup_3proxy.sh --add-user 12050 team01
+
+# Pause/resume a user
+sudo bash setup_3proxy.sh --pause-user team01
+sudo bash setup_3proxy.sh --resume-user team01
+```
+
 ## Main Create Command
 
 ```bash
