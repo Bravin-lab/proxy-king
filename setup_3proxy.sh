@@ -744,22 +744,16 @@ else
   URI_SCHEME="socks5h"
 fi
 
+# Do not force outbound bind to detected public IP.
+# On cloud NAT (e.g. AWS EC2), public IP is often not a local interface address,
+# and forcing -e/public external may break outbound connections.
 PUBLIC_IP="$(curl -4 -fsS ifconfig.me || true)"
-HAS_PUBLIC_IP="0"
-if [[ "$PUBLIC_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-  HAS_PUBLIC_IP="1"
-fi
-
-if [[ "$HAS_PUBLIC_IP" == "1" ]]; then
-  OUTBOUND_BIND_OPT=" -e${PUBLIC_IP}"
-  EXTERNAL_LINE="external ${PUBLIC_IP}"
-  EXTERNAL_IP="$PUBLIC_IP"
-else
+if ! [[ "$PUBLIC_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
   PUBLIC_IP="YOUR_SERVER_IP"
-  OUTBOUND_BIND_OPT=""
-  EXTERNAL_LINE=""
-  EXTERNAL_IP=""
 fi
+OUTBOUND_BIND_OPT=""
+EXTERNAL_LINE=""
+EXTERNAL_IP=""
 
 if [[ -n "$EXPIRE_DAYS" ]]; then
   if ! [[ "$EXPIRE_DAYS" =~ ^[0-9]+$ ]] || [[ "$EXPIRE_DAYS" -le 0 ]]; then
