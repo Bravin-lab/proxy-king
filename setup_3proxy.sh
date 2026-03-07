@@ -112,7 +112,7 @@ render_existing_config_from_db() {
     if [[ "$status" == "active" ]]; then
       {
         echo "allow ${username} ${WHITELIST}"
-        echo "${PROXY_BIN} -n -a -p${port} -i0.0.0.0${OUTBOUND_BIND_OPT}"
+        echo "${PROXY_BIN} -n -a -p${port} -i0.0.0.0"
         echo "deny *"
         echo "flush"
         echo
@@ -915,7 +915,7 @@ render_config_from_db() {
     if [[ "$status" == "active" ]]; then
       {
         echo "allow ${username} ${WHITELIST}"
-        echo "${PROXY_BIN} -n -a -p${port} -i0.0.0.0${OUTBOUND_BIND_OPT}"
+        echo "${PROXY_BIN} -n -a -p${port} -i0.0.0.0"
         echo "deny *"
         echo "flush"
         echo
@@ -1079,7 +1079,7 @@ render_config_from_db() {
     if [[ "$status" == "active" ]]; then
       {
         echo "allow ${username} ${WHITELIST}"
-        echo "${PROXY_BIN} -n -a -p${port} -i0.0.0.0${OUTBOUND_BIND_OPT}"
+        echo "${PROXY_BIN} -n -a -p${port} -i0.0.0.0"
         echo "deny *"
         echo "flush"
         echo
