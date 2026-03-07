@@ -780,7 +780,56 @@ echo "[INFO] Updating package index..."
 apt-get update -y
 
 echo "[INFO] Installing dependencies..."
-apt-get install -y 3proxy curl ufw openssl >/dev/null
+apt-get install -y curl ufw openssl build-essential git >/dev/null
+
+# Install 3proxy from source if not already installed
+if ! command -v 3proxy &> /dev/null; then
+  echo "[INFO] Building 3proxy from source..."
+  TMPDIR="$(mktemp -d)"
+  trap "rm -rf '$TMPDIR'" EXIT
+  
+  cd "$TMPDIR"
+  git clone https://github.com/z3apa3a/3proxy.git . >/dev/null 2>&1 || {
+    echo "[ERROR] Failed to clone 3proxy repository."
+    exit 1
+  }
+  
+  # Build 3proxy
+  make -f Makefile.Linux >/dev/null 2>&1 || {
+    echo "[ERROR] Failed to build 3proxy."
+    exit 1
+  }
+  
+  # Install binary
+  cp src/3proxy /usr/local/bin/3proxy
+  chmod +x /usr/local/bin/3proxy
+  
+  echo "[INFO] 3proxy installed successfully"
+  cd -
+else
+  echo "[INFO] 3proxy is already installed"
+fi
+
+# Ensure 3proxy systemd service exists
+if [[ ! -f /etc/systemd/system/3proxy.service ]]; then
+  cat > /etc/systemd/system/3proxy.service <<'EOF'
+[Unit]
+Description=3proxy proxy server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/3proxy -n -c /etc/3proxy/3proxy.cfg
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+fi
 
 if [[ "$HARDEN_OS" == "1" ]]; then
   apply_os_hardening "$DISABLE_IPV6_ON_HARDEN"
