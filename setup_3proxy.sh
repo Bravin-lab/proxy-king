@@ -784,28 +784,47 @@ apt-get install -y curl ufw openssl build-essential git >/dev/null
 
 # Install 3proxy from source if not already installed
 if ! command -v 3proxy &> /dev/null; then
-  echo "[INFO] Building 3proxy from source..."
-  TMPDIR="$(mktemp -d)"
-  trap "rm -rf '$TMPDIR'" EXIT
+  echo "[INFO] Building 3proxy from source (this may take a minute)..."
+  BUILD_DIR="$(mktemp -d)"
+  ORIGINAL_DIR="$(pwd)"
   
-  cd "$TMPDIR"
-  git clone https://github.com/z3apa3a/3proxy.git . >/dev/null 2>&1 || {
-    echo "[ERROR] Failed to clone 3proxy repository."
-    exit 1
-  }
+  cd "$BUILD_DIR" || exit 1
   
-  # Build 3proxy
-  make -f Makefile.Linux >/dev/null 2>&1 || {
-    echo "[ERROR] Failed to build 3proxy."
+  echo "[INFO] Cloning 3proxy repository..."
+  if ! git clone https://github.com/z3apa3a/3proxy.git 3proxy-src 2>&1; then
+    echo "[ERROR] Failed to clone 3proxy repository. Check your internet connection."
+    cd "$ORIGINAL_DIR"
+    rm -rf "$BUILD_DIR"
     exit 1
-  }
+  fi
+  
+  cd 3proxy-src || exit 1
+  
+  echo "[INFO] Compiling 3proxy..."
+  if ! make -f Makefile.Linux 2>&1; then
+    echo "[ERROR] Failed to compile 3proxy. Check build output above."
+    cd "$ORIGINAL_DIR"
+    rm -rf "$BUILD_DIR"
+    exit 1
+  fi
+  
+  # Verify binary was created
+  if [[ ! -f src/3proxy ]]; then
+    echo "[ERROR] Build completed but binary not found at src/3proxy"
+    cd "$ORIGINAL_DIR"
+    rm -rf "$BUILD_DIR"
+    exit 1
+  fi
   
   # Install binary
+  echo "[INFO] Installing 3proxy to /usr/local/bin/3proxy..."
   cp src/3proxy /usr/local/bin/3proxy
   chmod +x /usr/local/bin/3proxy
   
+  cd "$ORIGINAL_DIR"
+  rm -rf "$BUILD_DIR"
+  
   echo "[INFO] 3proxy installed successfully"
-  cd -
 else
   echo "[INFO] 3proxy is already installed"
 fi
