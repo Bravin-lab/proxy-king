@@ -38,6 +38,25 @@ Run interactive terminal UI:
 sudo bash proxy_ui.sh
 ```
 
+## AWS Security Group Configuration
+
+Configure these rules in your AWS EC2 security group **before** creating proxies.
+
+### Inbound Rules
+
+| Type | Protocol | Port Range | Source | Purpose |
+|------|----------|-----------|--------|---------|
+| SSH | TCP | 22 | Your IP or 0.0.0.0/0 | VPS administration |
+| Custom TCP | TCP | `10000-10019` | Client IPs or 0.0.0.0/0 | Proxy access (adjust per your setup) |
+
+### Outbound Rules
+
+| Type | Protocol | Port Range | Destination | Purpose |
+|------|----------|-----------|-------------|---------|
+| All traffic | All | All | 0.0.0.0/0 | Allow proxies to connect to clients/destinations |
+
+**Note:** Replace port range `10000-10019` with your actual proxy port range. Example: if creating 50 proxies on ports `20000-20049`, open TCP `20000:20049`.
+
 ## End-to-End VPS Setup
 
 Use this exact flow on a fresh Ubuntu VPS.
