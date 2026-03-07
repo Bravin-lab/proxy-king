@@ -808,9 +808,10 @@ if ! command -v 3proxy &> /dev/null; then
     exit 1
   fi
   
-  # Verify binary was created
-  if [[ ! -f src/3proxy ]]; then
-    echo "[ERROR] Build completed but binary not found at src/3proxy"
+  # Verify binary was created (3proxy builds to bin/3proxy)
+  if [[ ! -f bin/3proxy ]]; then
+    echo "[ERROR] Build completed but binary not found at bin/3proxy"
+    ls -la bin/ src/ 2>/dev/null || true
     cd "$ORIGINAL_DIR"
     rm -rf "$BUILD_DIR"
     exit 1
@@ -818,7 +819,7 @@ if ! command -v 3proxy &> /dev/null; then
   
   # Install binary
   echo "[INFO] Installing 3proxy to /usr/local/bin/3proxy..."
-  cp src/3proxy /usr/local/bin/3proxy
+  cp bin/3proxy /usr/local/bin/3proxy
   chmod +x /usr/local/bin/3proxy
   
   cd "$ORIGINAL_DIR"
