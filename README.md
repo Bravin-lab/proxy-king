@@ -17,6 +17,8 @@ This project is designed for operators who want a practical proxy lifecycle work
 
 - `setup_3proxy.sh`: main provisioning and management CLI
 - `proxy_ui.sh`: terminal menu UI (whiptail) for VPS usage
+- `telegram_bot.sh`: Telegram bot runner (long polling)
+- `install_telegram_bot.sh`: installer for Telegram bot systemd service
 
 ## Quick Start
 
@@ -37,6 +39,41 @@ Run interactive terminal UI:
 ```bash
 sudo bash proxy_ui.sh
 ```
+
+## Telegram Bot Control
+
+Install Telegram control bot on VPS (replace values):
+
+```bash
+chmod +x telegram_bot.sh install_telegram_bot.sh
+sudo bash install_telegram_bot.sh <BOT_TOKEN> <ALLOWED_CHAT_ID_CSV> /home/ubuntu/proxy-king/setup_3proxy.sh
+```
+
+Find your Telegram chat ID:
+
+1. Start a chat with your bot and send `/start`
+2. Open `https://api.telegram.org/bot<BOT_TOKEN>/getUpdates`
+3. Use the numeric `chat.id` as allowed ID
+
+Service management:
+
+```bash
+sudo systemctl status proxy-telegram-bot --no-pager
+sudo journalctl -u proxy-telegram-bot -f --no-pager
+```
+
+Available Telegram commands:
+
+- `/help`
+- `/status`
+- `/health`
+- `/list_active`
+- `/list_expired`
+- `/restart_3proxy`
+- `/add_user <port> <username> [password]`
+- `/pause_user <username>`
+- `/resume_user <username>`
+- `/rotate_passwords [username]`
 
 ## AWS Security Group Configuration
 
