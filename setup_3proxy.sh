@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Usage:
-#   sudo bash setup_3proxy.sh <proxy_count> <start_port> [username_prefix] [protocol] [whitelist] [credential_mode] [--expire-days N|--expires-at DATETIME] [--harden-os] [--keep-ipv6]
+#   sudo bash setup_3proxy.sh <proxy_count> <start_port> [username_prefix] [protocol] [whitelist] [credential_mode] [--expire-days N|--expires-at DATETIME] [--max-client-ips N] [--harden-os] [--keep-ipv6]
 #   sudo bash setup_3proxy.sh --list-active
 #   sudo bash setup_3proxy.sh --list-expired
 #   sudo bash setup_3proxy.sh --reactivate-user <username> [--new-expire-days N|--new-expires-at DATETIME]
@@ -31,7 +31,7 @@ SYSCTL_HARDEN_FILE="/etc/sysctl.d/99-proxy-hardening.conf"
 
 print_usage() {
   echo "Usage:"
-  echo "  sudo bash $0 <proxy_count> <start_port> [username_prefix] [protocol] [whitelist] [credential_mode] [--expire-days N|--expires-at DATETIME] [--harden-os] [--keep-ipv6]"
+  echo "  sudo bash $0 <proxy_count> <start_port> [username_prefix] [protocol] [whitelist] [credential_mode] [--expire-days N|--expires-at DATETIME] [--max-client-ips N] [--harden-os] [--keep-ipv6]"
   echo "  sudo bash $0 --list-active"
   echo "  sudo bash $0 --list-expired"
   echo "  sudo bash $0 --reactivate-user <username> [--new-expire-days N|--new-expires-at DATETIME]"
@@ -48,6 +48,7 @@ print_usage() {
   echo "credential_mode: auto (default) or manual"
   echo "--expire-days N: optional expiration window in days"
   echo "--expires-at DATETIME: optional absolute expiry date/time"
+  echo "--max-client-ips N: auto-delete account if unique connected client IPs exceed N (0 disables)"
   echo "--harden-os: apply host network hardening"
   echo "--keep-ipv6: with --harden-os, do not disable IPv6"
 }
@@ -98,7 +99,7 @@ render_existing_config_from_db() {
 
   user_line="users "
   active_count=0
-  while IFS='|' read -r username password port expires_epoch status protocol; do
+  while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
       user_line+="${username}:CL:${password} "
@@ -113,7 +114,7 @@ render_existing_config_from_db() {
   echo "$user_line" >> "$tmp_cfg"
   echo >> "$tmp_cfg"
 
-  while IFS='|' read -r username password port expires_epoch status protocol; do
+  while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
       entry_protocol="$(normalize_protocol_label "$protocol" "${PROXY_BIN:-proxy}")"
@@ -241,7 +242,7 @@ regenerate_exports_from_db() {
   : > "$OUTPUT_CREDENTIALS"
   : > "$OUTPUT_LIST"
 
-  while IFS='|' read -r username password port expires_epoch status protocol; do
+  while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
       entry_protocol="$(normalize_protocol_label "$protocol" "${PROXY_BIN:-proxy}")"
@@ -319,12 +320,12 @@ if [[ "${1:-}" == --* ]]; then
       fi
 
       load_settings_or_fail
-      printf '%-20s %-8s %-10s %-8s %s\n' "USERNAME" "PORT" "STATUS" "PROTO" "EXPIRES_AT"
-      while IFS='|' read -r username password port expires_epoch status protocol; do
+      printf '%-20s %-8s %-10s %-8s %-7s %s\n' "USERNAME" "PORT" "STATUS" "PROTO" "MAXIPS" "EXPIRES_AT"
+      while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
         [[ -z "${username:-}" ]] && continue
         if [[ "$status" == "$TARGET_STATUS" ]]; then
           proto_label="$(normalize_protocol_label "$protocol" "${PROXY_BIN:-proxy}")"
-          printf '%-20s %-8s %-10s %-8s %s\n' "$username" "$port" "$status" "$proto_label" "$(format_epoch_or_never "$expires_epoch")"
+          printf '%-20s %-8s %-10s %-8s %-7s %s\n' "$username" "$port" "$status" "$proto_label" "${max_client_ips:-0}" "$(format_epoch_or_never "$expires_epoch")"
         fi
       done < "$DB_FILE"
       exit 0
@@ -379,7 +380,7 @@ if [[ "${1:-}" == --* ]]; then
 
       FOUND=0
       TMP_DB="$(mktemp)"
-      while IFS='|' read -r username password port expires_epoch status protocol; do
+      while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
         [[ -z "${username:-}" ]] && continue
         if [[ "$username" == "$TARGET_USER" ]]; then
           FOUND=1
@@ -388,7 +389,7 @@ if [[ "${1:-}" == --* ]]; then
           fi
           status="active"
         fi
-        echo "${username}|${password}|${port}|${expires_epoch}|${status}|${protocol:-}" >> "$TMP_DB"
+        echo "${username}|${password}|${port}|${expires_epoch}|${status}|${protocol:-}|${max_client_ips:-0}" >> "$TMP_DB"
       done < "$DB_FILE"
 
       if [[ "$FOUND" -eq 0 ]]; then
@@ -420,13 +421,13 @@ if [[ "${1:-}" == --* ]]; then
 
       FOUND=0
       TMP_DB="$(mktemp)"
-      while IFS='|' read -r username password port expires_epoch status protocol; do
+      while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
         [[ -z "${username:-}" ]] && continue
         if [[ "$username" == "$TARGET_USER" ]]; then
           FOUND=1
           status="paused"
         fi
-        echo "${username}|${password}|${port}|${expires_epoch}|${status}|${protocol:-}" >> "$TMP_DB"
+        echo "${username}|${password}|${port}|${expires_epoch}|${status}|${protocol:-}|${max_client_ips:-0}" >> "$TMP_DB"
       done < "$DB_FILE"
 
       if [[ "$FOUND" -eq 0 ]]; then
@@ -451,13 +452,13 @@ if [[ "${1:-}" == --* ]]; then
 
       FOUND=0
       TMP_DB="$(mktemp)"
-      while IFS='|' read -r username password port expires_epoch status protocol; do
+      while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
         [[ -z "${username:-}" ]] && continue
         if [[ "$username" == "$TARGET_USER" ]]; then
           FOUND=1
           continue
         fi
-        echo "${username}|${password}|${port}|${expires_epoch}|${status}|${protocol:-}" >> "$TMP_DB"
+        echo "${username}|${password}|${port}|${expires_epoch}|${status}|${protocol:-}|${max_client_ips:-0}" >> "$TMP_DB"
       done < "$DB_FILE"
 
       if [[ "$FOUND" -eq 0 ]]; then
@@ -495,14 +496,14 @@ if [[ "${1:-}" == --* ]]; then
       FOUND=0
       CHANGED=0
       TMP_DB="$(mktemp)"
-      while IFS='|' read -r username password port expires_epoch status protocol; do
+      while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
         [[ -z "${username:-}" ]] && continue
         if [[ -z "$TARGET_USER" || "$username" == "$TARGET_USER" ]]; then
           FOUND=1
           password="$(openssl rand -hex 6)"
           CHANGED=$((CHANGED + 1))
         fi
-        echo "${username}|${password}|${port}|${expires_epoch}|${status}|${protocol:-}" >> "$TMP_DB"
+        echo "${username}|${password}|${port}|${expires_epoch}|${status}|${protocol:-}|${max_client_ips:-0}" >> "$TMP_DB"
       done < "$DB_FILE"
 
       if [[ -n "$TARGET_USER" && "$FOUND" -eq 0 ]]; then
@@ -527,12 +528,13 @@ if [[ "${1:-}" == --* ]]; then
       NEW_USERNAME="${3:-}"
       NEW_PASSWORD=""
       NEW_PROTOCOL=""
+      NEW_MAX_CLIENT_IPS="0"
       NEW_EXPIRE_DAYS=""
       NEW_EXPIRES_AT=""
       OPT_INDEX=4
 
       if [[ -z "$NEW_PORT" || -z "$NEW_USERNAME" ]]; then
-        echo "[ERROR] Usage: sudo bash $0 --add-user <port> <username> [password] [--protocol http|socks5] [--expire-days N|--expires-at DATETIME]"
+        echo "[ERROR] Usage: sudo bash $0 --add-user <port> <username> [password] [--protocol http|socks5] [--max-client-ips N] [--expire-days N|--expires-at DATETIME]"
         exit 1
       fi
 
@@ -554,6 +556,11 @@ if [[ "${1:-}" == --* ]]; then
           --protocol)
             OPT_INDEX=$((OPT_INDEX + 1))
             NEW_PROTOCOL="${!OPT_INDEX:-}"
+            OPT_INDEX=$((OPT_INDEX + 1))
+            ;;
+          --max-client-ips)
+            OPT_INDEX=$((OPT_INDEX + 1))
+            NEW_MAX_CLIENT_IPS="${!OPT_INDEX:-}"
             OPT_INDEX=$((OPT_INDEX + 1))
             ;;
           --expires-at)
@@ -608,6 +615,11 @@ if [[ "${1:-}" == --* ]]; then
         exit 1
       fi
 
+      if ! [[ "$NEW_MAX_CLIENT_IPS" =~ ^[0-9]+$ ]]; then
+        echo "[ERROR] --max-client-ips must be an integer >= 0."
+        exit 1
+      fi
+
       if [[ -n "$NEW_EXPIRE_DAYS" && -n "$NEW_EXPIRES_AT" ]]; then
         echo "[ERROR] Use either --expire-days or --expires-at, not both."
         exit 1
@@ -627,10 +639,10 @@ if [[ "${1:-}" == --* ]]; then
         fi
       fi
 
-      echo "${NEW_USERNAME}|${NEW_PASSWORD}|${NEW_PORT}|${NEW_EXPIRES_EPOCH}|active|${NEW_PROTOCOL_LABEL}" >> "$DB_FILE"
+      echo "${NEW_USERNAME}|${NEW_PASSWORD}|${NEW_PORT}|${NEW_EXPIRES_EPOCH}|active|${NEW_PROTOCOL_LABEL}|${NEW_MAX_CLIENT_IPS}" >> "$DB_FILE"
       chmod 600 "$DB_FILE"
       rebuild_runtime_from_db
-      echo "[INFO] Added user: ${NEW_USERNAME} on port ${NEW_PORT} (${NEW_PROTOCOL_LABEL})"
+      echo "[INFO] Added user: ${NEW_USERNAME} on port ${NEW_PORT} (${NEW_PROTOCOL_LABEL}, max IPs=${NEW_MAX_CLIENT_IPS})"
       exit 0
       ;;
     --port-range-check)
@@ -672,7 +684,7 @@ if [[ "${1:-}" == --* ]]; then
       load_settings_or_fail
       TEST_URL="https://api.ipify.org"
       printf '%-20s %-8s %-8s %-8s %-10s %s\n' "USERNAME" "PORT" "PROTO" "STATUS" "LATENCY" "DETAIL"
-      while IFS='|' read -r username password port expires_epoch status protocol; do
+      while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
         [[ -z "${username:-}" ]] && continue
         if [[ "$status" != "active" ]]; then
           continue
@@ -715,6 +727,7 @@ WHITELIST="${5:-*}"
 CREDENTIAL_MODE_RAW="${6:-auto}"
 EXPIRE_DAYS=""
 EXPIRES_AT=""
+MAX_CLIENT_IPS="0"
 HARDEN_OS="0"
 DISABLE_IPV6_ON_HARDEN="1"
 
@@ -740,6 +753,14 @@ if [[ $# -ge 7 ]]; then
           exit 1
         fi
         ;;
+      --max-client-ips)
+        idx=$((idx + 1))
+        MAX_CLIENT_IPS="${EXTRA_ARGS[$idx]:-}"
+        if [[ -z "$MAX_CLIENT_IPS" ]]; then
+          echo "[ERROR] --max-client-ips requires a value."
+          exit 1
+        fi
+        ;;
       --harden-os)
         HARDEN_OS="1"
         ;;
@@ -757,6 +778,11 @@ fi
 
 if [[ -n "$EXPIRE_DAYS" && -n "$EXPIRES_AT" ]]; then
   echo "[ERROR] Use either --expire-days or --expires-at, not both."
+  exit 1
+fi
+
+if ! [[ "$MAX_CLIENT_IPS" =~ ^[0-9]+$ ]]; then
+  echo "[ERROR] --max-client-ips must be an integer >= 0."
   exit 1
 fi
 
@@ -969,7 +995,7 @@ render_config_from_db() {
 
   user_line="users "
   active_count=0
-  while IFS='|' read -r username password port expires_epoch status protocol; do
+  while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
       user_line+="${username}:CL:${password} "
@@ -984,7 +1010,7 @@ render_config_from_db() {
   echo "$user_line" >> "$tmp_cfg"
   echo >> "$tmp_cfg"
 
-  while IFS='|' read -r username password port expires_epoch status protocol; do
+  while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
       entry_protocol="$(normalize_protocol_label "$protocol" "${PROXY_BIN:-proxy}")"
@@ -1071,7 +1097,7 @@ for ((i=0; i<PROXY_COUNT; i++)); do
 
   echo "${USERNAME}:${PASSWORD}:${PORT}" >> "$OUTPUT_CREDENTIALS"
   echo "${URI_SCHEME}://${USERNAME}:${PASSWORD}@${PUBLIC_IP}:${PORT}" >> "$OUTPUT_LIST"
-  echo "${USERNAME}|${PASSWORD}|${PORT}|${EXPIRES_EPOCH_GLOBAL}|active|${PROTOCOL_LABEL}" >> "$DB_FILE"
+  echo "${USERNAME}|${PASSWORD}|${PORT}|${EXPIRES_EPOCH_GLOBAL}|active|${PROTOCOL_LABEL}|${MAX_CLIENT_IPS}" >> "$DB_FILE"
 
 done
 
@@ -1168,7 +1194,7 @@ render_config_from_db() {
 
   user_line="users "
   active_count=0
-  while IFS='|' read -r username password port expires_epoch status protocol; do
+  while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
       user_line+="${username}:CL:${password} "
@@ -1183,7 +1209,7 @@ render_config_from_db() {
   echo "$user_line" >> "$tmp_cfg"
   echo >> "$tmp_cfg"
 
-  while IFS='|' read -r username password port expires_epoch status protocol; do
+  while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
       entry_protocol="$(normalize_protocol_label "$protocol" "${PROXY_BIN:-proxy}")"
@@ -1214,16 +1240,41 @@ NOW_EPOCH="$(date +%s)"
 CHANGED=0
 TMP_DB="$(mktemp)"
 
-while IFS='|' read -r username password port expires_epoch status protocol; do
+unique_client_ip_count() {
+  local port="$1"
+  ss -tnH4 state established "( sport = :${port} )" 2>/dev/null \
+    | awk '{print $5}' \
+    | cut -d: -f1 \
+    | sed '/^$/d' \
+    | sort -u \
+    | wc -l
+}
+
+while IFS='|' read -r username password port expires_epoch status protocol max_client_ips; do
   [[ -z "${username:-}" ]] && continue
   new_status="$status"
+
+  limit="${max_client_ips:-0}"
+  if ! [[ "$limit" =~ ^[0-9]+$ ]]; then
+    limit=0
+  fi
 
   if [[ "$status" == "active" && "$expires_epoch" =~ ^[0-9]+$ && "$expires_epoch" -gt 0 && "$NOW_EPOCH" -ge "$expires_epoch" ]]; then
     new_status="expired"
     CHANGED=1
   fi
 
-  echo "${username}|${password}|${port}|${expires_epoch}|${new_status}|${protocol:-}" >> "$TMP_DB"
+  # Auto-delete account if unique connected client IPs exceed configured limit.
+  if [[ "$new_status" == "active" && "$limit" -gt 0 ]]; then
+    current_ips="$(unique_client_ip_count "$port")"
+    if [[ "$current_ips" -gt "$limit" ]]; then
+      CHANGED=1
+      logger -t 3proxy-expiry-check "Deleting user ${username}: connected IPs ${current_ips} exceeded limit ${limit}"
+      continue
+    fi
+  fi
+
+  echo "${username}|${password}|${port}|${expires_epoch}|${new_status}|${protocol:-}|${max_client_ips:-0}" >> "$TMP_DB"
 done < "$DB_FILE"
 
 if [[ "$CHANGED" -eq 1 ]]; then

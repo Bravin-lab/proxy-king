@@ -76,7 +76,7 @@ Available Telegram commands:
 - `/list_active`
 - `/list_expired`
 - `/restart_3proxy`
-- `/add_user <port> <username> [password] [protocol]`
+- `/add_user <port> <username> [password] [protocol] [max_client_ips]`
 - `/pause_user <username>`
 - `/resume_user <username>`
 - `/rotate_passwords [username]`
@@ -154,7 +154,7 @@ sudo bash setup_3proxy.sh --resume-user team01
 ## Main Create Command
 
 ```bash
-sudo bash setup_3proxy.sh <proxy_count> <start_port> [username_prefix] [protocol] [whitelist] [credential_mode] [--expire-days N|--expires-at DATETIME] [--harden-os] [--keep-ipv6]
+sudo bash setup_3proxy.sh <proxy_count> <start_port> [username_prefix] [protocol] [whitelist] [credential_mode] [--expire-days N|--expires-at DATETIME] [--max-client-ips N] [--harden-os] [--keep-ipv6]
 ```
 
 Parameters:
@@ -165,13 +165,14 @@ Parameters:
 - `[protocol]`: `http` (default) or `socks5`
 - `[whitelist]`: source IP/CIDR or comma-separated list, default `*`
 - `[credential_mode]`: `auto` (default) or `manual`
+- `--max-client-ips N`: auto-delete account if connected unique client IP count exceeds `N` (`0` disables)
 
 ## Management Commands
 
 ```bash
 sudo bash setup_3proxy.sh --list-active
 sudo bash setup_3proxy.sh --list-expired
-sudo bash setup_3proxy.sh --add-user <port> <username> [password] [--protocol http|socks5] [--expire-days N|--expires-at DATETIME]
+sudo bash setup_3proxy.sh --add-user <port> <username> [password] [--protocol http|socks5] [--max-client-ips N] [--expire-days N|--expires-at DATETIME]
 sudo bash setup_3proxy.sh --pause-user <username>
 sudo bash setup_3proxy.sh --resume-user <username>
 sudo bash setup_3proxy.sh --reactivate-user <username> [--new-expire-days N|--new-expires-at DATETIME]

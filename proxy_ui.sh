@@ -53,7 +53,7 @@ ask_menu() {
 
 create_proxies_flow() {
   local count start_port user_prefix protocol whitelist cred_mode
-  local expire_mode expire_days expires_at
+  local expire_mode expire_days expires_at max_client_ips
   local harden="no" keep_ipv6="no"
   local cmd_args=()
 
@@ -70,6 +70,8 @@ create_proxies_flow() {
   cred_mode="$(ask_menu "Create Proxies" "Credential mode" \
     "auto" "Auto-generate users/passwords" \
     "manual" "Prompt per user/password")" || return
+
+  max_client_ips="$(ask_input "Create Proxies" "Max unique client IPs per account (0 = unlimited)" "0")" || return
 
   expire_mode="$(ask_menu "Create Proxies" "Expiration mode" \
     "none" "No expiry" \
@@ -101,6 +103,9 @@ create_proxies_flow() {
   if [[ -n "$expires_at" ]]; then
     cmd_args+=("--expires-at" "$expires_at")
   fi
+  if [[ -n "$max_client_ips" ]]; then
+    cmd_args+=("--max-client-ips" "$max_client_ips")
+  fi
   if [[ "$harden" == "yes" ]]; then
     cmd_args+=("--harden-os")
     if [[ "$keep_ipv6" == "yes" ]]; then
@@ -112,7 +117,7 @@ create_proxies_flow() {
 }
 
 add_user_flow() {
-  local port username password protocol expire_mode expire_days expires_at
+  local port username password protocol expire_mode expire_days expires_at max_client_ips
   local cmd_args=()
 
   port="$(ask_input "Add User" "Port" "12050")" || return
@@ -123,6 +128,8 @@ add_user_flow() {
     "auto" "Use current default protocol" \
     "http" "HTTP" \
     "socks5" "SOCKS5")" || return
+
+  max_client_ips="$(ask_input "Add User" "Max unique client IPs (0 = unlimited)" "0")" || return
 
   expire_mode="$(ask_menu "Add User" "Expiration mode" \
     "none" "No expiry" \
@@ -146,6 +153,9 @@ add_user_flow() {
   fi
   if [[ "$protocol" != "auto" ]]; then
     cmd_args+=("--protocol" "$protocol")
+  fi
+  if [[ -n "$max_client_ips" ]]; then
+    cmd_args+=("--max-client-ips" "$max_client_ips")
   fi
   if [[ -n "$expire_days" ]]; then
     cmd_args+=("--expire-days" "$expire_days")
