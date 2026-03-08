@@ -86,7 +86,7 @@ handle_command() {
 
   case "$cmd" in
     /start|/help)
-      send_message "$chat_id" "Proxy Bot commands:\n/help\n/status\n/health\n/list_active\n/list_expired\n/restart_3proxy\n/add_user <port> <username> [password]\n/pause_user <username>\n/resume_user <username>\n/rotate_passwords [username]"
+      send_message "$chat_id" $'Proxy Bot commands:\n/help\n/status\n/health\n/list_active\n/list_expired\n/restart_3proxy\n/add_user <port> <username> [password]\n/pause_user <username>\n/resume_user <username>\n/rotate_passwords [username]'
       ;;
     /status)
       out="$(systemctl status 3proxy --no-pager -l 2>&1 || true)"
