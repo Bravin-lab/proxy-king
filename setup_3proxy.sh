@@ -8,7 +8,7 @@ set -euo pipefail
 #   sudo bash setup_3proxy.sh --reactivate-user <username> [--new-expire-days N|--new-expires-at DATETIME]
 #   sudo bash setup_3proxy.sh --rotate-passwords [--user <username>]
 #   sudo bash setup_3proxy.sh --delete-user <username>
-#   sudo bash setup_3proxy.sh --add-user <port> <username> [password] [--expire-days N|--expires-at DATETIME]
+#   sudo bash setup_3proxy.sh --add-user <port> <username> [password] [--protocol http|socks5] [--expire-days N|--expires-at DATETIME]
 #   sudo bash setup_3proxy.sh --pause-user <username>
 #   sudo bash setup_3proxy.sh --resume-user <username>
 #   sudo bash setup_3proxy.sh --port-range-check <start_port> <count>
@@ -37,7 +37,7 @@ print_usage() {
   echo "  sudo bash $0 --reactivate-user <username> [--new-expire-days N|--new-expires-at DATETIME]"
   echo "  sudo bash $0 --rotate-passwords [--user <username>]"
   echo "  sudo bash $0 --delete-user <username>"
-  echo "  sudo bash $0 --add-user <port> <username> [password] [--expire-days N|--expires-at DATETIME]"
+  echo "  sudo bash $0 --add-user <port> <username> [password] [--protocol http|socks5] [--expire-days N|--expires-at DATETIME]"
   echo "  sudo bash $0 --pause-user <username>"
   echo "  sudo bash $0 --resume-user <username>"
   echo "  sudo bash $0 --port-range-check <start_port> <count>"
@@ -61,6 +61,12 @@ render_existing_config_from_db() {
   local port
   local expires_epoch
   local status
+  local protocol
+  local entry_protocol
+  local entry_bin
+  local protocol
+  local entry_protocol
+  local entry_bin
 
   if [[ ! -f "$SETTINGS_FILE" ]]; then
     echo "[ERROR] Missing settings file: $SETTINGS_FILE"
@@ -92,7 +98,7 @@ render_existing_config_from_db() {
 
   user_line="users "
   active_count=0
-  while IFS='|' read -r username password port expires_epoch status; do
+  while IFS='|' read -r username password port expires_epoch status protocol; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
       user_line+="${username}:CL:${password} "
@@ -107,12 +113,14 @@ render_existing_config_from_db() {
   echo "$user_line" >> "$tmp_cfg"
   echo >> "$tmp_cfg"
 
-  while IFS='|' read -r username password port expires_epoch status; do
+  while IFS='|' read -r username password port expires_epoch status protocol; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
+      entry_protocol="$(normalize_protocol_label "$protocol" "${PROXY_BIN:-proxy}")"
+      entry_bin="$(proxy_bin_from_protocol_label "$entry_protocol")"
       {
         echo "allow ${username} ${WHITELIST}"
-        echo "${PROXY_BIN} -n -a -p${port} -i0.0.0.0"
+        echo "${entry_bin} -n -a -p${port} -i0.0.0.0"
         echo "deny *"
         echo "flush"
         echo
@@ -151,12 +159,57 @@ load_settings_or_fail() {
   source "$SETTINGS_FILE"
 }
 
-uri_scheme_from_proxy_bin() {
-  if [[ "${PROXY_BIN:-}" == "socks" ]]; then
+protocol_label_from_bin() {
+  if [[ "${1:-proxy}" == "socks" ]]; then
+    echo "socks5"
+  else
+    echo "http"
+  fi
+}
+
+normalize_protocol_label() {
+  local raw
+  local fallback_bin
+
+  raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  fallback_bin="${2:-proxy}"
+
+  case "$raw" in
+    socks|socks5)
+      echo "socks5"
+      ;;
+    proxy|http)
+      echo "http"
+      ;;
+    "")
+      protocol_label_from_bin "$fallback_bin"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+proxy_bin_from_protocol_label() {
+  if [[ "${1:-http}" == "socks5" ]]; then
+    echo "socks"
+  else
+    echo "proxy"
+  fi
+}
+
+uri_scheme_from_protocol_label() {
+  if [[ "${1:-http}" == "socks5" ]]; then
     echo "socks5h"
   else
     echo "http"
   fi
+}
+
+uri_scheme_from_proxy_bin() {
+  local label
+  label="$(protocol_label_from_bin "${1:-${PROXY_BIN:-proxy}}")"
+  uri_scheme_from_protocol_label "$label"
 }
 
 is_port_listening() {
@@ -170,12 +223,13 @@ regenerate_exports_from_db() {
   local port
   local expires_epoch
   local status
+  local protocol
+  local entry_protocol
   local scheme
   local list_ip
 
   load_settings_or_fail || return 1
 
-  scheme="$(uri_scheme_from_proxy_bin)"
   list_ip="${EXTERNAL_IP:-}"
   if [[ -z "$list_ip" ]]; then
     list_ip="$(curl -4 -fsS ifconfig.me || true)"
@@ -187,9 +241,11 @@ regenerate_exports_from_db() {
   : > "$OUTPUT_CREDENTIALS"
   : > "$OUTPUT_LIST"
 
-  while IFS='|' read -r username password port expires_epoch status; do
+  while IFS='|' read -r username password port expires_epoch status protocol; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
+      entry_protocol="$(normalize_protocol_label "$protocol" "${PROXY_BIN:-proxy}")"
+      scheme="$(uri_scheme_from_protocol_label "$entry_protocol")"
       echo "${username}:${password}:${port}" >> "$OUTPUT_CREDENTIALS"
       echo "${scheme}://${username}:${password}@${list_ip}:${port}" >> "$OUTPUT_LIST"
     fi
@@ -262,11 +318,13 @@ if [[ "${1:-}" == --* ]]; then
         TARGET_STATUS="expired"
       fi
 
-      printf '%-20s %-8s %-10s %s\n' "USERNAME" "PORT" "STATUS" "EXPIRES_AT"
-      while IFS='|' read -r username password port expires_epoch status; do
+      load_settings_or_fail
+      printf '%-20s %-8s %-10s %-8s %s\n' "USERNAME" "PORT" "STATUS" "PROTO" "EXPIRES_AT"
+      while IFS='|' read -r username password port expires_epoch status protocol; do
         [[ -z "${username:-}" ]] && continue
         if [[ "$status" == "$TARGET_STATUS" ]]; then
-          printf '%-20s %-8s %-10s %s\n' "$username" "$port" "$status" "$(format_epoch_or_never "$expires_epoch")"
+          proto_label="$(normalize_protocol_label "$protocol" "${PROXY_BIN:-proxy}")"
+          printf '%-20s %-8s %-10s %-8s %s\n' "$username" "$port" "$status" "$proto_label" "$(format_epoch_or_never "$expires_epoch")"
         fi
       done < "$DB_FILE"
       exit 0
@@ -321,7 +379,7 @@ if [[ "${1:-}" == --* ]]; then
 
       FOUND=0
       TMP_DB="$(mktemp)"
-      while IFS='|' read -r username password port expires_epoch status; do
+      while IFS='|' read -r username password port expires_epoch status protocol; do
         [[ -z "${username:-}" ]] && continue
         if [[ "$username" == "$TARGET_USER" ]]; then
           FOUND=1
@@ -330,7 +388,7 @@ if [[ "${1:-}" == --* ]]; then
           fi
           status="active"
         fi
-        echo "${username}|${password}|${port}|${expires_epoch}|${status}" >> "$TMP_DB"
+        echo "${username}|${password}|${port}|${expires_epoch}|${status}|${protocol:-}" >> "$TMP_DB"
       done < "$DB_FILE"
 
       if [[ "$FOUND" -eq 0 ]]; then
@@ -362,13 +420,13 @@ if [[ "${1:-}" == --* ]]; then
 
       FOUND=0
       TMP_DB="$(mktemp)"
-      while IFS='|' read -r username password port expires_epoch status; do
+      while IFS='|' read -r username password port expires_epoch status protocol; do
         [[ -z "${username:-}" ]] && continue
         if [[ "$username" == "$TARGET_USER" ]]; then
           FOUND=1
           status="paused"
         fi
-        echo "${username}|${password}|${port}|${expires_epoch}|${status}" >> "$TMP_DB"
+        echo "${username}|${password}|${port}|${expires_epoch}|${status}|${protocol:-}" >> "$TMP_DB"
       done < "$DB_FILE"
 
       if [[ "$FOUND" -eq 0 ]]; then
@@ -393,13 +451,13 @@ if [[ "${1:-}" == --* ]]; then
 
       FOUND=0
       TMP_DB="$(mktemp)"
-      while IFS='|' read -r username password port expires_epoch status; do
+      while IFS='|' read -r username password port expires_epoch status protocol; do
         [[ -z "${username:-}" ]] && continue
         if [[ "$username" == "$TARGET_USER" ]]; then
           FOUND=1
           continue
         fi
-        echo "${username}|${password}|${port}|${expires_epoch}|${status}" >> "$TMP_DB"
+        echo "${username}|${password}|${port}|${expires_epoch}|${status}|${protocol:-}" >> "$TMP_DB"
       done < "$DB_FILE"
 
       if [[ "$FOUND" -eq 0 ]]; then
@@ -437,14 +495,14 @@ if [[ "${1:-}" == --* ]]; then
       FOUND=0
       CHANGED=0
       TMP_DB="$(mktemp)"
-      while IFS='|' read -r username password port expires_epoch status; do
+      while IFS='|' read -r username password port expires_epoch status protocol; do
         [[ -z "${username:-}" ]] && continue
         if [[ -z "$TARGET_USER" || "$username" == "$TARGET_USER" ]]; then
           FOUND=1
           password="$(openssl rand -hex 6)"
           CHANGED=$((CHANGED + 1))
         fi
-        echo "${username}|${password}|${port}|${expires_epoch}|${status}" >> "$TMP_DB"
+        echo "${username}|${password}|${port}|${expires_epoch}|${status}|${protocol:-}" >> "$TMP_DB"
       done < "$DB_FILE"
 
       if [[ -n "$TARGET_USER" && "$FOUND" -eq 0 ]]; then
@@ -468,14 +526,17 @@ if [[ "${1:-}" == --* ]]; then
       NEW_PORT="${2:-}"
       NEW_USERNAME="${3:-}"
       NEW_PASSWORD=""
+      NEW_PROTOCOL=""
       NEW_EXPIRE_DAYS=""
       NEW_EXPIRES_AT=""
       OPT_INDEX=4
 
       if [[ -z "$NEW_PORT" || -z "$NEW_USERNAME" ]]; then
-        echo "[ERROR] Usage: sudo bash $0 --add-user <port> <username> [password] [--expire-days N|--expires-at DATETIME]"
+        echo "[ERROR] Usage: sudo bash $0 --add-user <port> <username> [password] [--protocol http|socks5] [--expire-days N|--expires-at DATETIME]"
         exit 1
       fi
+
+      load_settings_or_fail
 
       if [[ "${4:-}" != "" && "${4:-}" != --* ]]; then
         NEW_PASSWORD="$4"
@@ -488,6 +549,11 @@ if [[ "${1:-}" == --* ]]; then
           --expire-days)
             OPT_INDEX=$((OPT_INDEX + 1))
             NEW_EXPIRE_DAYS="${!OPT_INDEX:-}"
+            OPT_INDEX=$((OPT_INDEX + 1))
+            ;;
+          --protocol)
+            OPT_INDEX=$((OPT_INDEX + 1))
+            NEW_PROTOCOL="${!OPT_INDEX:-}"
             OPT_INDEX=$((OPT_INDEX + 1))
             ;;
           --expires-at)
@@ -536,6 +602,12 @@ if [[ "${1:-}" == --* ]]; then
         exit 1
       fi
 
+      NEW_PROTOCOL_LABEL="$(normalize_protocol_label "$NEW_PROTOCOL" "${PROXY_BIN:-proxy}")"
+      if [[ -z "$NEW_PROTOCOL_LABEL" ]]; then
+        echo "[ERROR] Invalid protocol. Use http or socks5."
+        exit 1
+      fi
+
       if [[ -n "$NEW_EXPIRE_DAYS" && -n "$NEW_EXPIRES_AT" ]]; then
         echo "[ERROR] Use either --expire-days or --expires-at, not both."
         exit 1
@@ -555,10 +627,10 @@ if [[ "${1:-}" == --* ]]; then
         fi
       fi
 
-      echo "${NEW_USERNAME}|${NEW_PASSWORD}|${NEW_PORT}|${NEW_EXPIRES_EPOCH}|active" >> "$DB_FILE"
+      echo "${NEW_USERNAME}|${NEW_PASSWORD}|${NEW_PORT}|${NEW_EXPIRES_EPOCH}|active|${NEW_PROTOCOL_LABEL}" >> "$DB_FILE"
       chmod 600 "$DB_FILE"
       rebuild_runtime_from_db
-      echo "[INFO] Added user: ${NEW_USERNAME} on port ${NEW_PORT}"
+      echo "[INFO] Added user: ${NEW_USERNAME} on port ${NEW_PORT} (${NEW_PROTOCOL_LABEL})"
       exit 0
       ;;
     --port-range-check)
@@ -598,14 +670,16 @@ if [[ "${1:-}" == --* ]]; then
       ;;
     --health-check)
       load_settings_or_fail
-      SCHEME="$(uri_scheme_from_proxy_bin)"
       TEST_URL="https://api.ipify.org"
-      printf '%-20s %-8s %-8s %-10s %s\n' "USERNAME" "PORT" "STATUS" "LATENCY" "DETAIL"
-      while IFS='|' read -r username password port expires_epoch status; do
+      printf '%-20s %-8s %-8s %-8s %-10s %s\n' "USERNAME" "PORT" "PROTO" "STATUS" "LATENCY" "DETAIL"
+      while IFS='|' read -r username password port expires_epoch status protocol; do
         [[ -z "${username:-}" ]] && continue
         if [[ "$status" != "active" ]]; then
           continue
         fi
+
+        entry_protocol="$(normalize_protocol_label "$protocol" "${PROXY_BIN:-proxy}")"
+        SCHEME="$(uri_scheme_from_protocol_label "$entry_protocol")"
 
         proxy_url="${SCHEME}://${username}:${password}@127.0.0.1:${port}"
         check_out="$(curl -4 -sS --max-time 12 --proxy "$proxy_url" -o /dev/null -w '%{http_code} %{time_total}' "$TEST_URL" 2>/dev/null || true)"
@@ -613,9 +687,9 @@ if [[ "${1:-}" == --* ]]; then
         latency="${check_out##* }"
 
         if [[ "$http_code" =~ ^[0-9]{3}$ ]] && [[ "$http_code" != "000" ]]; then
-          printf '%-20s %-8s %-8s %-10s %s\n' "$username" "$port" "up" "${latency}s" "HTTP $http_code"
+          printf '%-20s %-8s %-8s %-8s %-10s %s\n' "$username" "$port" "$entry_protocol" "up" "${latency}s" "HTTP $http_code"
         else
-          printf '%-20s %-8s %-8s %-10s %s\n' "$username" "$port" "down" "-" "request failed"
+          printf '%-20s %-8s %-8s %-8s %-10s %s\n' "$username" "$port" "$entry_protocol" "down" "-" "request failed"
         fi
       done < "$DB_FILE"
       exit 0
@@ -895,7 +969,7 @@ render_config_from_db() {
 
   user_line="users "
   active_count=0
-  while IFS='|' read -r username password port expires_epoch status; do
+  while IFS='|' read -r username password port expires_epoch status protocol; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
       user_line+="${username}:CL:${password} "
@@ -910,12 +984,14 @@ render_config_from_db() {
   echo "$user_line" >> "$tmp_cfg"
   echo >> "$tmp_cfg"
 
-  while IFS='|' read -r username password port expires_epoch status; do
+  while IFS='|' read -r username password port expires_epoch status protocol; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
+      entry_protocol="$(normalize_protocol_label "$protocol" "${PROXY_BIN:-proxy}")"
+      entry_bin="$(proxy_bin_from_protocol_label "$entry_protocol")"
       {
         echo "allow ${username} ${WHITELIST}"
-        echo "${PROXY_BIN} -n -a -p${port} -i0.0.0.0"
+        echo "${entry_bin} -n -a -p${port} -i0.0.0.0"
         echo "deny *"
         echo "flush"
         echo
@@ -995,7 +1071,7 @@ for ((i=0; i<PROXY_COUNT; i++)); do
 
   echo "${USERNAME}:${PASSWORD}:${PORT}" >> "$OUTPUT_CREDENTIALS"
   echo "${URI_SCHEME}://${USERNAME}:${PASSWORD}@${PUBLIC_IP}:${PORT}" >> "$OUTPUT_LIST"
-  echo "${USERNAME}|${PASSWORD}|${PORT}|${EXPIRES_EPOCH_GLOBAL}|active" >> "$DB_FILE"
+  echo "${USERNAME}|${PASSWORD}|${PORT}|${EXPIRES_EPOCH_GLOBAL}|active|${PROTOCOL_LABEL}" >> "$DB_FILE"
 
 done
 
@@ -1036,6 +1112,39 @@ render_config_from_db() {
   local port
   local expires_epoch
   local status
+  local protocol
+  local entry_protocol
+  local entry_bin
+
+  protocol_label_from_bin() {
+    if [[ "${1:-proxy}" == "socks" ]]; then
+      echo "socks5"
+    else
+      echo "http"
+    fi
+  }
+
+  normalize_protocol_label() {
+    local raw
+    local fallback_bin
+
+    raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+    fallback_bin="${2:-proxy}"
+    case "$raw" in
+      socks|socks5) echo "socks5" ;;
+      proxy|http) echo "http" ;;
+      "") protocol_label_from_bin "$fallback_bin" ;;
+      *) echo "" ;;
+    esac
+  }
+
+  proxy_bin_from_protocol_label() {
+    if [[ "${1:-http}" == "socks5" ]]; then
+      echo "socks"
+    else
+      echo "proxy"
+    fi
+  }
 
   tmp_cfg="$(mktemp)"
   {
@@ -1059,7 +1168,7 @@ render_config_from_db() {
 
   user_line="users "
   active_count=0
-  while IFS='|' read -r username password port expires_epoch status; do
+  while IFS='|' read -r username password port expires_epoch status protocol; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
       user_line+="${username}:CL:${password} "
@@ -1074,12 +1183,14 @@ render_config_from_db() {
   echo "$user_line" >> "$tmp_cfg"
   echo >> "$tmp_cfg"
 
-  while IFS='|' read -r username password port expires_epoch status; do
+  while IFS='|' read -r username password port expires_epoch status protocol; do
     [[ -z "${username:-}" ]] && continue
     if [[ "$status" == "active" ]]; then
+      entry_protocol="$(normalize_protocol_label "$protocol" "${PROXY_BIN:-proxy}")"
+      entry_bin="$(proxy_bin_from_protocol_label "$entry_protocol")"
       {
         echo "allow ${username} ${WHITELIST}"
-        echo "${PROXY_BIN} -n -a -p${port} -i0.0.0.0"
+        echo "${entry_bin} -n -a -p${port} -i0.0.0.0"
         echo "deny *"
         echo "flush"
         echo
@@ -1103,7 +1214,7 @@ NOW_EPOCH="$(date +%s)"
 CHANGED=0
 TMP_DB="$(mktemp)"
 
-while IFS='|' read -r username password port expires_epoch status; do
+while IFS='|' read -r username password port expires_epoch status protocol; do
   [[ -z "${username:-}" ]] && continue
   new_status="$status"
 
@@ -1112,7 +1223,7 @@ while IFS='|' read -r username password port expires_epoch status; do
     CHANGED=1
   fi
 
-  echo "${username}|${password}|${port}|${expires_epoch}|${new_status}" >> "$TMP_DB"
+  echo "${username}|${password}|${port}|${expires_epoch}|${new_status}|${protocol:-}" >> "$TMP_DB"
 done < "$DB_FILE"
 
 if [[ "$CHANGED" -eq 1 ]]; then
@@ -1195,7 +1306,7 @@ echo "Format in ${OUTPUT_LIST}: ${URI_SCHEME}://USERNAME:PASSWORD@IP:PORT"
 if [[ "$PROTOCOL" == "socks5" ]]; then
   echo "[INFO] SOCKS URIs use socks5h:// to route DNS through proxy."
 fi
-if [[ "$HAS_PUBLIC_IP" != "1" ]]; then
+if [[ "$PUBLIC_IP" == "YOUR_SERVER_IP" ]]; then
   echo "[WARN] Could not detect public IPv4. Replace YOUR_SERVER_IP in /root/proxy-list.txt"
 fi
 if [[ "$EXPIRES_EPOCH_GLOBAL" -gt 0 ]]; then

@@ -76,7 +76,7 @@ Available Telegram commands:
 - `/list_active`
 - `/list_expired`
 - `/restart_3proxy`
-- `/add_user <port> <username> [password]`
+- `/add_user <port> <username> [password] [protocol]`
 - `/pause_user <username>`
 - `/resume_user <username>`
 - `/rotate_passwords [username]`
@@ -171,7 +171,7 @@ Parameters:
 ```bash
 sudo bash setup_3proxy.sh --list-active
 sudo bash setup_3proxy.sh --list-expired
-sudo bash setup_3proxy.sh --add-user <port> <username> [password] [--expire-days N|--expires-at DATETIME]
+sudo bash setup_3proxy.sh --add-user <port> <username> [password] [--protocol http|socks5] [--expire-days N|--expires-at DATETIME]
 sudo bash setup_3proxy.sh --pause-user <username>
 sudo bash setup_3proxy.sh --resume-user <username>
 sudo bash setup_3proxy.sh --reactivate-user <username> [--new-expire-days N|--new-expires-at DATETIME]

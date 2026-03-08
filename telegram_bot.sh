@@ -86,7 +86,7 @@ handle_command() {
 
   case "$cmd" in
     /start|/help)
-      send_message "$chat_id" $'Proxy Bot commands:\n/help\n/status\n/health\n/list_active\n/list_expired\n/restart_3proxy\n/add_user <port> <username> [password]\n/pause_user <username>\n/resume_user <username>\n/rotate_passwords [username]'
+      send_message "$chat_id" $'Proxy Bot commands:\n/help\n/status\n/health\n/list_active\n/list_expired\n/restart_3proxy\n/add_user <port> <username> [password] [protocol]\n/pause_user <username>\n/resume_user <username>\n/rotate_passwords [username]'
       ;;
     /status)
       out="$(systemctl status 3proxy --no-pager -l 2>&1 || true)"
@@ -113,14 +113,26 @@ handle_command() {
       ;;
     /add_user)
       if [[ "${#parts[@]}" -lt 3 ]]; then
-        send_message "$chat_id" "Usage: /add_user <port> <username> [password]"
+        send_message "$chat_id" "Usage: /add_user <port> <username> [password] [protocol]"
       elif ! [[ "${parts[1]}" =~ ^[0-9]+$ ]]; then
         send_message "$chat_id" "Invalid port. Example: /add_user 12050 team01"
       else
-        if [[ "${#parts[@]}" -ge 4 ]]; then
-          out="$(run_proxy_cmd --add-user "${parts[1]}" "${parts[2]}" "${parts[3]}")"
-        else
+        if [[ "${#parts[@]}" -eq 3 ]]; then
           out="$(run_proxy_cmd --add-user "${parts[1]}" "${parts[2]}")"
+        elif [[ "${#parts[@]}" -eq 4 ]]; then
+          if [[ "${parts[3],,}" == "http" || "${parts[3],,}" == "socks5" ]]; then
+            out="$(run_proxy_cmd --add-user "${parts[1]}" "${parts[2]}" --protocol "${parts[3],,}")"
+          else
+            out="$(run_proxy_cmd --add-user "${parts[1]}" "${parts[2]}" "${parts[3]}")"
+          fi
+        elif [[ "${#parts[@]}" -eq 5 ]]; then
+          if [[ "${parts[4],,}" == "http" || "${parts[4],,}" == "socks5" ]]; then
+            out="$(run_proxy_cmd --add-user "${parts[1]}" "${parts[2]}" "${parts[3]}" --protocol "${parts[4],,}")"
+          else
+            out="Usage: /add_user <port> <username> [password] [protocol]"
+          fi
+        else
+          out="Usage: /add_user <port> <username> [password] [protocol]"
         fi
         send_message "$chat_id" "$(truncate_text "$out")"
       fi
