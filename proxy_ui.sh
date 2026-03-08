@@ -53,7 +53,7 @@ ask_menu() {
 
 create_proxies_flow() {
   local count start_port user_prefix protocol whitelist cred_mode
-  local expire_mode expire_days expires_at max_client_ips
+  local expire_mode expire_days expires_at max_client_ips max_client_ips_action
   local harden="no" keep_ipv6="no"
   local cmd_args=()
 
@@ -72,6 +72,10 @@ create_proxies_flow() {
     "manual" "Prompt per user/password")" || return
 
   max_client_ips="$(ask_input "Create Proxies" "Max unique client IPs per account (0 = unlimited)" "0")" || return
+
+  max_client_ips_action="$(ask_menu "Create Proxies" "On limit breach (max-client-ips-action)" \
+    "delete" "Delete account" \
+    "pause" "Pause account")" || return
 
   expire_mode="$(ask_menu "Create Proxies" "Expiration mode" \
     "none" "No expiry" \
@@ -105,6 +109,7 @@ create_proxies_flow() {
   fi
   if [[ -n "$max_client_ips" ]]; then
     cmd_args+=("--max-client-ips" "$max_client_ips")
+    cmd_args+=("--max-client-ips-action" "$max_client_ips_action")
   fi
   if [[ "$harden" == "yes" ]]; then
     cmd_args+=("--harden-os")
@@ -117,7 +122,7 @@ create_proxies_flow() {
 }
 
 add_user_flow() {
-  local port username password protocol expire_mode expire_days expires_at max_client_ips
+  local port username password protocol expire_mode expire_days expires_at max_client_ips max_client_ips_action
   local cmd_args=()
 
   port="$(ask_input "Add User" "Port" "12050")" || return
@@ -130,6 +135,10 @@ add_user_flow() {
     "socks5" "SOCKS5")" || return
 
   max_client_ips="$(ask_input "Add User" "Max unique client IPs (0 = unlimited)" "0")" || return
+
+  max_client_ips_action="$(ask_menu "Add User" "On limit breach (max-client-ips-action)" \
+    "delete" "Delete account" \
+    "pause" "Pause account")" || return
 
   expire_mode="$(ask_menu "Add User" "Expiration mode" \
     "none" "No expiry" \
@@ -156,6 +165,7 @@ add_user_flow() {
   fi
   if [[ -n "$max_client_ips" ]]; then
     cmd_args+=("--max-client-ips" "$max_client_ips")
+    cmd_args+=("--max-client-ips-action" "$max_client_ips_action")
   fi
   if [[ -n "$expire_days" ]]; then
     cmd_args+=("--expire-days" "$expire_days")

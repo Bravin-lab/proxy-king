@@ -86,6 +86,7 @@ handle_command() {
   local add_pass=""
   local add_proto=""
   local add_max_ips=""
+  local add_action=""
   local token=""
   local -a add_cmd=()
 
@@ -93,7 +94,7 @@ handle_command() {
 
   case "$cmd" in
     /start|/help)
-      send_message "$chat_id" $'Proxy Bot commands:\n/help\n/status\n/health\n/list_active\n/list_expired\n/restart_3proxy\n/add_user <port> <username> [password] [protocol] [max_client_ips]\n/pause_user <username>\n/resume_user <username>\n/rotate_passwords [username]'
+      send_message "$chat_id" $'Proxy Bot commands:\n/help\n/status\n/health\n/list_active\n/list_expired\n/restart_3proxy\n/add_user <port> <username> [password] [protocol] [max_client_ips] [action]\n/pause_user <username>\n/resume_user <username>\n/rotate_passwords [username]'
       ;;
     /status)
       out="$(systemctl status 3proxy --no-pager -l 2>&1 || true)"
@@ -120,7 +121,7 @@ handle_command() {
       ;;
     /add_user)
       if [[ "${#parts[@]}" -lt 3 ]]; then
-        send_message "$chat_id" "Usage: /add_user <port> <username> [password] [protocol] [max_client_ips]"
+        send_message "$chat_id" "Usage: /add_user <port> <username> [password] [protocol] [max_client_ips] [action]"
       elif ! [[ "${parts[1]}" =~ ^[0-9]+$ ]]; then
         send_message "$chat_id" "Invalid port. Example: /add_user 12050 team01"
       else
@@ -129,25 +130,32 @@ handle_command() {
         add_pass=""
         add_proto=""
         add_max_ips=""
+        add_action=""
 
         for ((i=3; i<${#parts[@]}; i++)); do
           token="${parts[$i]}"
           if [[ "${token,,}" == "http" || "${token,,}" == "socks5" ]]; then
             if [[ -n "$add_proto" ]]; then
-              out="Usage: /add_user <port> <username> [password] [protocol] [max_client_ips]"
+              out="Usage: /add_user <port> <username> [password] [protocol] [max_client_ips] [action]"
               break
             fi
             add_proto="${token,,}"
+          elif [[ "${token,,}" == "delete" || "${token,,}" == "pause" ]]; then
+            if [[ -n "$add_action" ]]; then
+              out="Usage: /add_user <port> <username> [password] [protocol] [max_client_ips] [action]"
+              break
+            fi
+            add_action="${token,,}"
           elif [[ "$token" =~ ^[0-9]+$ ]]; then
             if [[ -n "$add_max_ips" ]]; then
-              out="Usage: /add_user <port> <username> [password] [protocol] [max_client_ips]"
+              out="Usage: /add_user <port> <username> [password] [protocol] [max_client_ips] [action]"
               break
             fi
             add_max_ips="$token"
           elif [[ -z "$add_pass" ]]; then
             add_pass="$token"
           else
-            out="Usage: /add_user <port> <username> [password] [protocol] [max_client_ips]"
+            out="Usage: /add_user <port> <username> [password] [protocol] [max_client_ips] [action]"
             break
           fi
         done
@@ -162,6 +170,9 @@ handle_command() {
           fi
           if [[ -n "$add_max_ips" ]]; then
             add_cmd+=(--max-client-ips "$add_max_ips")
+          fi
+          if [[ -n "$add_action" ]]; then
+            add_cmd+=(--max-client-ips-action "$add_action")
           fi
           out="$(run_proxy_cmd "${add_cmd[@]}")"
         fi
