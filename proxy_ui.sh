@@ -112,12 +112,17 @@ create_proxies_flow() {
 }
 
 add_user_flow() {
-  local port username password expire_mode expire_days expires_at
+  local port username password protocol expire_mode expire_days expires_at
   local cmd_args=()
 
   port="$(ask_input "Add User" "Port" "12050")" || return
   username="$(ask_input "Add User" "Username" "team01")" || return
   password="$(ask_input "Add User" "Password (leave blank to auto-generate)" "")" || return
+
+  protocol="$(ask_menu "Add User" "Protocol" \
+    "auto" "Use current default protocol" \
+    "http" "HTTP" \
+    "socks5" "SOCKS5")" || return
 
   expire_mode="$(ask_menu "Add User" "Expiration mode" \
     "none" "No expiry" \
@@ -138,6 +143,9 @@ add_user_flow() {
   cmd_args=("--add-user" "$port" "$username")
   if [[ -n "$password" ]]; then
     cmd_args+=("$password")
+  fi
+  if [[ "$protocol" != "auto" ]]; then
+    cmd_args+=("--protocol" "$protocol")
   fi
   if [[ -n "$expire_days" ]]; then
     cmd_args+=("--expire-days" "$expire_days")
