@@ -5,15 +5,35 @@ set -euo pipefail
 # Usage:
 #   sudo bash install_telegram_bot.sh <telegram_bot_token> <allowed_chat_ids_csv> [proxy_script_path]
 
-if [[ $# -lt 2 ]]; then
-  echo "Usage: sudo bash $0 <telegram_bot_token> <allowed_chat_ids_csv> [proxy_script_path]"
-  echo "Example: sudo bash $0 123456:ABCDEF 123456789 /home/ubuntu/proxy-king/setup_3proxy.sh"
-  exit 1
+BOT_TOKEN="${1:-}"
+ALLOWED_CHAT_IDS="${2:-}"
+PROXY_SCRIPT_PATH="${3:-/home/ubuntu/proxy-king/setup_3proxy.sh}"
+
+if [[ -z "$BOT_TOKEN" || -z "$ALLOWED_CHAT_IDS" ]]; then
+  if [[ ! -t 0 ]]; then
+    echo "[ERROR] Missing required arguments in non-interactive mode."
+    echo "Usage: sudo bash $0 <telegram_bot_token> <allowed_chat_ids_csv> [proxy_script_path]"
+    echo "Example: sudo bash $0 123456:ABCDEF 123456789 /home/ubuntu/proxy-king/setup_3proxy.sh"
+    exit 1
+  fi
+
+  echo "[INFO] Interactive setup for Telegram bot"
+  if [[ -z "$BOT_TOKEN" ]]; then
+    read -r -p "Enter Telegram bot token: " BOT_TOKEN
+  fi
+  if [[ -z "$ALLOWED_CHAT_IDS" ]]; then
+    read -r -p "Enter allowed chat IDs (comma-separated): " ALLOWED_CHAT_IDS
+  fi
+  read -r -p "Proxy script path [/home/ubuntu/proxy-king/setup_3proxy.sh]: " input_proxy_path
+  if [[ -n "${input_proxy_path:-}" ]]; then
+    PROXY_SCRIPT_PATH="$input_proxy_path"
+  fi
 fi
 
-BOT_TOKEN="$1"
-ALLOWED_CHAT_IDS="$2"
-PROXY_SCRIPT_PATH="${3:-/home/ubuntu/proxy-king/setup_3proxy.sh}"
+if [[ -z "$BOT_TOKEN" || -z "$ALLOWED_CHAT_IDS" ]]; then
+  echo "[ERROR] BOT token and allowed chat IDs are required."
+  exit 1
+fi
 
 SCRIPT_SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOT_SOURCE="$SCRIPT_SOURCE_DIR/telegram_bot.sh"

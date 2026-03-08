@@ -49,6 +49,12 @@ chmod +x telegram_bot.sh install_telegram_bot.sh
 sudo bash install_telegram_bot.sh <BOT_TOKEN> <ALLOWED_CHAT_ID_CSV> /home/ubuntu/proxy-king/setup_3proxy.sh
 ```
 
+Interactive mode (prompts for missing values):
+
+```bash
+sudo bash install_telegram_bot.sh
+```
+
 Find your Telegram chat ID:
 
 1. Start a chat with your bot and send `/start`
