@@ -23,6 +23,8 @@ This project is designed for operators who want a practical proxy lifecycle work
 ## Quick Start
 
 ```bash
+sudo apt update
+sudo apt install build-essential openssl libssl-dev -y
 git clone <your-repo-url>
 cd "proxy script"
 chmod +x setup_3proxy.sh proxy_ui.sh
