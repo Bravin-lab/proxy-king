@@ -25,8 +25,8 @@ This project is designed for operators who want a practical proxy lifecycle work
 ```bash
 sudo apt update
 sudo apt install build-essential openssl libssl-dev -y
-git clone <your-repo-url>
-cd "proxy script"
+git clone https://github.com/Bravin-lab/proxy-king
+cd "proxy-script"
 chmod +x setup_3proxy.sh proxy_ui.sh
 ```
 
