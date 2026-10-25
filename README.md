@@ -7,6 +7,7 @@ Provision and manage authenticated HTTP/SOCKS5 proxies on Ubuntu VPS with one sc
 This project is designed for operators who want a practical proxy lifecycle workflow on a server:
 
 - Create proxies in bulk
+- Add additional proxy batches without deleting existing accounts
 - Add, pause, resume, delete, and rotate users
 - Enforce optional source IP allowlists
 - Set account expiry and auto-disable expired users
@@ -16,7 +17,7 @@ This project is designed for operators who want a practical proxy lifecycle work
 ## Files
 
 - `setup_3proxy.sh`: main provisioning and management CLI
-- `proxy_ui.sh`: terminal menu UI (whiptail) for VPS usage
+- `proxy_ui.sh`: terminal menu-driven CLI loop for VPS usage
 - `telegram_bot.sh`: Telegram bot runner (long polling)
 - `install_telegram_bot.sh`: installer for Telegram bot systemd service
 
@@ -33,14 +34,19 @@ chmod +x setup_3proxy.sh proxy_ui.sh
 Create 20 SOCKS5 proxies starting from port `10000`:
 
 ```bash
-sudo bash setup_3proxy.sh 20 10000 user socks5 "*" auto
+sudo bash setup_3proxy.sh 20 10000 user socks5 "*" auto --host proxy.example.com
 ```
 
 Run interactive terminal UI:
 
 ```bash
-sudo bash proxy_ui.sh
+sudo bash setup_3proxy.sh --install-menu
+menu
 ```
+
+`menu` is installed to `/usr/local/bin/menu` and can be run from any directory.
+It opens a loop-style terminal menu (numbered options) without `whiptail`.
+If you run `setup_3proxy.sh` for other operations first, it will auto-install/update `menu` as well.
 
 ## Telegram Bot Control
 
@@ -156,7 +162,7 @@ sudo bash setup_3proxy.sh --resume-user team01
 ## Main Create Command
 
 ```bash
-sudo bash setup_3proxy.sh <proxy_count> <start_port> [username_prefix] [protocol] [whitelist] [credential_mode] [--expire-days N|--expires-at DATETIME] [--max-client-ips N] [--max-client-ips-action delete|pause] [--harden-os] [--keep-ipv6]
+sudo bash setup_3proxy.sh <proxy_count> <start_port> [username_prefix] [protocol] [whitelist] [credential_mode] [--expire-days N|--expires-at DATETIME] [--max-client-ips N] [--max-client-ips-action delete|pause] [--host DOMAIN_OR_IP] [--harden-os] [--keep-ipv6]
 ```
 
 Parameters:
@@ -169,6 +175,7 @@ Parameters:
 - `[credential_mode]`: `auto` (default) or `manual`
 - `--max-client-ips N`: enforce unique connected client IP limit per account (`0` disables)
 - `--max-client-ips-action delete|pause`: action on limit breach (default `delete`)
+- `--host DOMAIN_OR_IP`: host used in exported proxy URLs (for example, `proxy.example.com`)
 
 ## Management Commands
 
@@ -183,6 +190,16 @@ sudo bash setup_3proxy.sh --delete-user <username>
 sudo bash setup_3proxy.sh --rotate-passwords [--user <username>]
 sudo bash setup_3proxy.sh --port-range-check <start_port> <count>
 sudo bash setup_3proxy.sh --health-check
+sudo bash setup_3proxy.sh --list-alive
+sudo bash setup_3proxy.sh --set-host <domain_or_ip>
+sudo bash setup_3proxy.sh --harden-now [--keep-ipv6]
+sudo bash setup_3proxy.sh --security-audit
+```
+
+Set or change the exported proxy host later:
+
+```bash
+sudo bash setup_3proxy.sh --set-host proxy.example.com
 ```
 
 ## Common Examples
@@ -239,9 +256,12 @@ Expiry automation:
 
 ## Security Notes
 
+- No proxy is fully "undetectable". This project focuses on reducing leaks and exposure.
 - For SOCKS, generated URLs use `socks5h://` to route DNS resolution through proxy.
 - DNS resolvers are configured with `/tcp` to reduce DNS leak paths.
 - Optional `--harden-os` applies sysctl network hardening and DNS egress controls.
+- `--harden-now` can apply hardening to an already installed server without recreating proxies.
+- `--security-audit` prints pass/fail checks for firewall, services, DNS mode, timer status, and files.
 - `--keep-ipv6` keeps IPv6 enabled when hardening is enabled.
 - If UFW is active, proxy port range is opened automatically during creation.
 
@@ -251,7 +271,7 @@ Expiry automation:
 - Internet access to install packages
 - `systemd` available (for service and expiry timer)
 
-The script installs required packages automatically (`3proxy`, `curl`, `ufw`, `openssl`, `whiptail` for UI).
+The script installs required packages automatically (`3proxy`, `curl`, `ufw`, `openssl`).
 
 ## Service Checks
 

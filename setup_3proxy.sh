@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 # Usage:
-#   sudo bash setup_3proxy.sh <proxy_count> <start_port> [username_prefix] [protocol] [whitelist] [credential_mode] [--expire-days N|--expires-at DATETIME] [--max-client-ips N] [--max-client-ips-action delete|pause] [--harden-os] [--keep-ipv6]
+#   sudo bash setup_3proxy.sh <proxy_count> <start_port> [username_prefix] [protocol] [whitelist] [credential_mode] [--expire-days N|--expires-at DATETIME] [--max-client-ips N] [--max-client-ips-action delete|pause] [--host DOMAIN_OR_IP] [--harden-os] [--keep-ipv6]
 #   sudo bash setup_3proxy.sh --list-active
 #   sudo bash setup_3proxy.sh --list-expired
 #   sudo bash setup_3proxy.sh --reactivate-user <username> [--new-expire-days N|--new-expires-at DATETIME]
@@ -13,9 +14,15 @@ set -euo pipefail
 #   sudo bash setup_3proxy.sh --resume-user <username>
 #   sudo bash setup_3proxy.sh --port-range-check <start_port> <count>
 #   sudo bash setup_3proxy.sh --health-check
+#   sudo bash setup_3proxy.sh --list-alive
+#   sudo bash setup_3proxy.sh --set-host <domain_or_ip>
+#   sudo bash setup_3proxy.sh --harden-now [--keep-ipv6]
+#   sudo bash setup_3proxy.sh --security-audit
+#   sudo bash setup_3proxy.sh --install-menu
 # Example:
 #   sudo bash setup_3proxy.sh 20 10000 user
 #   sudo bash setup_3proxy.sh 20 10000 user socks5 203.0.113.10
+#   sudo bash setup_3proxy.sh 20 10000 user socks5 "*" auto --host proxy.example.com
 #   sudo bash setup_3proxy.sh 5 15000 user http "*" manual
 
 CFG_DIR="/etc/3proxy"
@@ -28,10 +35,14 @@ EXPIRY_CHECK_SCRIPT="/usr/local/bin/3proxy-expiry-check.sh"
 EXPIRY_SERVICE_FILE="/etc/systemd/system/3proxy-expiry-check.service"
 EXPIRY_TIMER_FILE="/etc/systemd/system/3proxy-expiry-check.timer"
 SYSCTL_HARDEN_FILE="/etc/sysctl.d/99-proxy-hardening.conf"
+LOG_DIR="/var/log/3proxy"
+LOG_FILE="$LOG_DIR/3proxy.log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MENU_LAUNCHER="/usr/local/bin/menu"
 
 print_usage() {
   echo "Usage:"
-  echo "  sudo bash $0 <proxy_count> <start_port> [username_prefix] [protocol] [whitelist] [credential_mode] [--expire-days N|--expires-at DATETIME] [--max-client-ips N] [--max-client-ips-action delete|pause] [--harden-os] [--keep-ipv6]"
+  echo "  sudo bash $0 <proxy_count> <start_port> [username_prefix] [protocol] [whitelist] [credential_mode] [--expire-days N|--expires-at DATETIME] [--max-client-ips N] [--max-client-ips-action delete|pause] [--host DOMAIN_OR_IP] [--harden-os] [--keep-ipv6]"
   echo "  sudo bash $0 --list-active"
   echo "  sudo bash $0 --list-expired"
   echo "  sudo bash $0 --reactivate-user <username> [--new-expire-days N|--new-expires-at DATETIME]"
@@ -42,6 +53,11 @@ print_usage() {
   echo "  sudo bash $0 --resume-user <username>"
   echo "  sudo bash $0 --port-range-check <start_port> <count>"
   echo "  sudo bash $0 --health-check"
+  echo "  sudo bash $0 --list-alive"
+  echo "  sudo bash $0 --set-host <domain_or_ip>"
+  echo "  sudo bash $0 --harden-now [--keep-ipv6]"
+  echo "  sudo bash $0 --security-audit"
+  echo "  sudo bash $0 --install-menu"
   echo
   echo "protocol: http (default) or socks5"
   echo "whitelist: optional source IP/CIDR or comma-separated list"
@@ -50,8 +66,43 @@ print_usage() {
   echo "--expires-at DATETIME: optional absolute expiry date/time"
   echo "--max-client-ips N: enforce unique connected client IP limit per account (0 disables)"
   echo "--max-client-ips-action: action on limit breach: delete (default) or pause"
+  echo "--host DOMAIN_OR_IP: host shown in exported proxy URLs (e.g. proxy.example.com)"
+  echo "--harden-now: apply host hardening immediately"
+  echo "--security-audit: print security checklist and hardening status"
   echo "--harden-os: apply host network hardening"
   echo "--keep-ipv6: with --harden-os, do not disable IPv6"
+}
+
+ensure_menu_launcher() {
+  local ui_script="$SCRIPT_DIR/proxy_ui.sh"
+
+  if [[ ! -f "$ui_script" ]]; then
+    echo "[WARN] UI script not found at $ui_script"
+    echo "[WARN] Skipping menu launcher setup."
+    return 0
+  fi
+
+  cat > "$MENU_LAUNCHER" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+UI_SCRIPT="$ui_script"
+
+if [[ ! -f "\$UI_SCRIPT" ]]; then
+  echo "[ERROR] Proxy menu script not found at \$UI_SCRIPT"
+  echo "[INFO] Re-run: sudo bash $SCRIPT_DIR/setup_3proxy.sh --install-menu"
+  exit 1
+fi
+
+if [[ \${EUID:-\$(id -u)} -ne 0 ]]; then
+  exec sudo bash "\$UI_SCRIPT" "\$@"
+else
+  exec bash "\$UI_SCRIPT" "\$@"
+fi
+EOF
+
+  chmod 755 "$MENU_LAUNCHER"
+  echo "[INFO] Menu launcher installed: $MENU_LAUNCHER"
 }
 
 render_existing_config_from_db() {
@@ -79,6 +130,8 @@ render_existing_config_from_db() {
   {
     echo "daemon"
     echo "maxconn 2000"
+    echo "log ${LOG_FILE} D"
+    echo "rotate 30"
     echo "nserver 1.1.1.1/tcp"
     echo "nserver 8.8.8.8/tcp"
     echo "nserver 9.9.9.9/tcp"
@@ -229,7 +282,10 @@ regenerate_exports_from_db() {
 
   load_settings_or_fail || return 1
 
-  list_ip="${EXTERNAL_IP:-}"
+  list_ip="${DISTRIBUTION_HOST:-}"
+  if [[ -z "$list_ip" ]]; then
+    list_ip="${EXTERNAL_IP:-}"
+  fi
   if [[ -z "$list_ip" ]]; then
     list_ip="$(curl -4 -fsS ifconfig.me || true)"
   fi
@@ -283,12 +339,25 @@ apply_os_hardening() {
   sysctl --system >/dev/null
 
   if command -v ufw >/dev/null 2>&1 && ufw status | grep -qi "Status: active"; then
-    echo "[INFO] UFW is active. Hardening DNS egress rules..."
+    echo "[INFO] UFW is active. Hardening DNS and egress rules..."
     ufw allow out to 1.1.1.1 port 53 proto tcp >/dev/null || true
     ufw allow out to 8.8.8.8 port 53 proto tcp >/dev/null || true
     ufw allow out to 9.9.9.9 port 53 proto tcp >/dev/null || true
     ufw deny out to any port 53 proto udp >/dev/null || true
     ufw deny out to any port 53 proto tcp >/dev/null || true
+
+    # Block common internal/link-local/reserved ranges to reduce abuse paths.
+    ufw deny out to 0.0.0.0/8 >/dev/null || true
+    ufw deny out to 10.0.0.0/8 >/dev/null || true
+    ufw deny out to 100.64.0.0/10 >/dev/null || true
+    ufw deny out to 127.0.0.0/8 >/dev/null || true
+    ufw deny out to 169.254.0.0/16 >/dev/null || true
+    ufw deny out to 172.16.0.0/12 >/dev/null || true
+    ufw deny out to 192.168.0.0/16 >/dev/null || true
+    ufw deny out to 198.18.0.0/15 >/dev/null || true
+    ufw deny out to 224.0.0.0/4 >/dev/null || true
+    ufw deny out to 240.0.0.0/4 >/dev/null || true
+    ufw deny out to 169.254.169.254 >/dev/null || true
   else
     echo "[WARN] UFW not active. DNS egress hardening rules were not applied."
   fi
@@ -299,9 +368,11 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   exit 1
 fi
 
+ensure_menu_launcher
+
 if [[ "${1:-}" == --* ]]; then
   case "$1" in
-    --list-active|--list-expired|--reactivate-user|--rotate-passwords|--delete-user|--add-user|--pause-user|--resume-user|--health-check)
+    --list-active|--list-expired|--reactivate-user|--rotate-passwords|--delete-user|--add-user|--pause-user|--resume-user|--health-check|--list-alive)
       if [[ ! -f "$DB_FILE" ]]; then
         echo "[ERROR] Proxy DB not found at $DB_FILE"
         echo "Run proxy creation first."
@@ -311,6 +382,171 @@ if [[ "${1:-}" == --* ]]; then
   esac
 
   case "$1" in
+    --install-menu)
+      ensure_menu_launcher
+      echo "[INFO] You can now launch the UI with: menu"
+      exit 0
+      ;;
+    --harden-now)
+      DISABLE_IPV6_NOW="1"
+      if [[ "${2:-}" == "--keep-ipv6" ]]; then
+        DISABLE_IPV6_NOW="0"
+      elif [[ -n "${2:-}" ]]; then
+        echo "[ERROR] Unknown option for --harden-now: ${2:-}"
+        echo "Usage: sudo bash $0 --harden-now [--keep-ipv6]"
+        exit 1
+      fi
+
+      apply_os_hardening "$DISABLE_IPV6_NOW"
+      echo "[INFO] Host hardening applied."
+      exit 0
+      ;;
+    --security-audit)
+      PASS_COUNT=0
+      FAIL_COUNT=0
+
+      report_check() {
+        local status="$1"
+        local label="$2"
+        local detail="$3"
+        printf '%-6s %-28s %s\n' "$status" "$label" "$detail"
+        if [[ "$status" == "PASS" ]]; then
+          PASS_COUNT=$((PASS_COUNT + 1))
+        else
+          FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+      }
+
+      echo "Security Audit Report"
+      echo "Generated at: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+      echo
+      printf '%-6s %-28s %s\n' "STATE" "CHECK" "DETAIL"
+
+      if command -v ufw >/dev/null 2>&1; then
+        if ufw status | grep -qi "Status: active"; then
+          report_check "PASS" "UFW" "active"
+        else
+          report_check "FAIL" "UFW" "not active"
+        fi
+      else
+        report_check "FAIL" "UFW" "not installed"
+      fi
+
+      if [[ -f "$SYSCTL_HARDEN_FILE" ]]; then
+        report_check "PASS" "Sysctl hardening file" "$SYSCTL_HARDEN_FILE present"
+      else
+        report_check "FAIL" "Sysctl hardening file" "$SYSCTL_HARDEN_FILE missing"
+      fi
+
+      if [[ -f "$SETTINGS_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$SETTINGS_FILE"
+        report_check "PASS" "Settings file" "$SETTINGS_FILE present"
+      else
+        report_check "FAIL" "Settings file" "$SETTINGS_FILE missing"
+      fi
+
+      if [[ -f "$CFG_FILE" ]]; then
+        report_check "PASS" "3proxy config" "$CFG_FILE present"
+
+        if grep -qE '^nserver .*/tcp$' "$CFG_FILE"; then
+          report_check "PASS" "DNS mode" "TCP resolvers configured"
+        else
+          report_check "FAIL" "DNS mode" "TCP resolver entries missing"
+        fi
+
+        if grep -q '^log ' "$CFG_FILE"; then
+          report_check "PASS" "3proxy logging" "enabled"
+        else
+          report_check "FAIL" "3proxy logging" "missing log directive"
+        fi
+      else
+        report_check "FAIL" "3proxy config" "$CFG_FILE missing"
+      fi
+
+      if systemctl is-enabled 3proxy >/dev/null 2>&1; then
+        report_check "PASS" "3proxy service" "enabled"
+      else
+        report_check "FAIL" "3proxy service" "not enabled"
+      fi
+
+      if systemctl is-active 3proxy >/dev/null 2>&1; then
+        report_check "PASS" "3proxy runtime" "active"
+      else
+        report_check "FAIL" "3proxy runtime" "inactive"
+      fi
+
+      if systemctl is-enabled 3proxy-expiry-check.timer >/dev/null 2>&1; then
+        report_check "PASS" "Expiry timer" "enabled"
+      else
+        report_check "FAIL" "Expiry timer" "not enabled"
+      fi
+
+      if systemctl is-active 3proxy-expiry-check.timer >/dev/null 2>&1; then
+        report_check "PASS" "Expiry timer runtime" "active"
+      else
+        report_check "FAIL" "Expiry timer runtime" "inactive"
+      fi
+
+      if [[ -f "$LOG_FILE" ]]; then
+        report_check "PASS" "3proxy log file" "$LOG_FILE present"
+      else
+        report_check "FAIL" "3proxy log file" "$LOG_FILE missing"
+      fi
+
+      if [[ -f "$DB_FILE" ]]; then
+        ACTIVE_USERS_COUNT="$(awk -F'|' '$5=="active"{c++} END{print c+0}' "$DB_FILE")"
+        report_check "PASS" "Active user records" "$ACTIVE_USERS_COUNT"
+      else
+        report_check "FAIL" "Proxy DB" "$DB_FILE missing"
+      fi
+
+      if [[ -f "$SYSCTL_HARDEN_FILE" ]] && grep -q 'disable_ipv6 = 1' "$SYSCTL_HARDEN_FILE"; then
+        report_check "PASS" "IPv6 hardening" "disabled via sysctl"
+      else
+        report_check "FAIL" "IPv6 hardening" "IPv6 disable rules not found"
+      fi
+
+      echo
+      echo "Summary: PASS=$PASS_COUNT FAIL=$FAIL_COUNT"
+      if [[ "$FAIL_COUNT" -gt 0 ]]; then
+        echo "[WARN] Some security checks failed. Run: sudo bash $0 --harden-now"
+      else
+        echo "[INFO] Security baseline checks passed."
+      fi
+      exit 0
+      ;;
+    --set-host)
+      NEW_HOST="${2:-}"
+      if [[ -z "$NEW_HOST" ]]; then
+        echo "[ERROR] Usage: sudo bash $0 --set-host <domain_or_ip>"
+        exit 1
+      fi
+      if [[ "$NEW_HOST" == *" "* ]]; then
+        echo "[ERROR] Host cannot contain spaces."
+        exit 1
+      fi
+
+      load_settings_or_fail
+      DISTRIBUTION_HOST="$NEW_HOST"
+
+      {
+        printf "PROXY_BIN=%q\n" "${PROXY_BIN:-proxy}"
+        printf "WHITELIST=%q\n" "${WHITELIST:-*}"
+        printf "OUTBOUND_BIND_OPT=%q\n" "${OUTBOUND_BIND_OPT:-}"
+        printf "EXTERNAL_IP=%q\n" "${EXTERNAL_IP:-}"
+        printf "DISTRIBUTION_HOST=%q\n" "$DISTRIBUTION_HOST"
+      } > "$SETTINGS_FILE"
+      chmod 600 "$SETTINGS_FILE"
+
+      if [[ -f "$DB_FILE" ]]; then
+        regenerate_exports_from_db
+      fi
+
+      echo "[INFO] Distribution host set to: $DISTRIBUTION_HOST"
+      echo "[INFO] Exported list updated: $OUTPUT_LIST"
+      exit 0
+      ;;
     --list-active|--list-expired)
       TARGET_STATUS="active"
       if [[ "$1" == "--list-expired" ]]; then
@@ -714,6 +950,30 @@ if [[ "${1:-}" == --* ]]; then
       done < "$DB_FILE"
       exit 0
       ;;
+    --list-alive)
+      load_settings_or_fail
+      TEST_URL="https://api.ipify.org"
+      printf '%-20s %-8s %-8s %-10s %s\n' "USERNAME" "PORT" "PROTO" "LATENCY" "DETAIL"
+      while IFS='|' read -r username password port expires_epoch status protocol max_client_ips max_client_ips_action; do
+        [[ -z "${username:-}" ]] && continue
+        if [[ "$status" != "active" ]]; then
+          continue
+        fi
+
+        entry_protocol="$(normalize_protocol_label "$protocol" "${PROXY_BIN:-proxy}")"
+        SCHEME="$(uri_scheme_from_protocol_label "$entry_protocol")"
+
+        proxy_url="${SCHEME}://${username}:${password}@127.0.0.1:${port}"
+        check_out="$(curl -4 -sS --max-time 12 --proxy "$proxy_url" -o /dev/null -w '%{http_code} %{time_total}' "$TEST_URL" 2>/dev/null || true)"
+        http_code="${check_out%% *}"
+        latency="${check_out##* }"
+
+        if [[ "$http_code" =~ ^[0-9]{3}$ ]] && [[ "$http_code" != "000" ]]; then
+          printf '%-20s %-8s %-8s %-10s %s\n' "$username" "$port" "$entry_protocol" "${latency}s" "HTTP $http_code"
+        fi
+      done < "$DB_FILE"
+      exit 0
+      ;;
     --*)
       echo "[ERROR] Unknown option: $1"
       print_usage
@@ -737,6 +997,7 @@ EXPIRE_DAYS=""
 EXPIRES_AT=""
 MAX_CLIENT_IPS="0"
 MAX_CLIENT_IPS_ACTION="delete"
+HOST_DISPLAY=""
 HARDEN_OS="0"
 DISABLE_IPV6_ON_HARDEN="1"
 
@@ -775,6 +1036,14 @@ if [[ $# -ge 7 ]]; then
         MAX_CLIENT_IPS_ACTION="$(printf '%s' "${EXTRA_ARGS[$idx]:-}" | tr '[:upper:]' '[:lower:]')"
         if [[ -z "$MAX_CLIENT_IPS_ACTION" ]]; then
           echo "[ERROR] --max-client-ips-action requires a value."
+          exit 1
+        fi
+        ;;
+      --host)
+        idx=$((idx + 1))
+        HOST_DISPLAY="${EXTRA_ARGS[$idx]:-}"
+        if [[ -z "$HOST_DISPLAY" ]]; then
+          echo "[ERROR] --host requires a value."
           exit 1
         fi
         ;;
@@ -822,6 +1091,11 @@ if [[ "$WHITELIST" == "" ]]; then
   WHITELIST="*"
 fi
 
+if [[ -n "$HOST_DISPLAY" && "$HOST_DISPLAY" == *" "* ]]; then
+  echo "[ERROR] --host cannot contain spaces."
+  exit 1
+fi
+
 CREDENTIAL_MODE="$(printf '%s' "$CREDENTIAL_MODE_RAW" | tr '[:upper:]' '[:lower:]')"
 if [[ "$CREDENTIAL_MODE" != "auto" && "$CREDENTIAL_MODE" != "manual" ]]; then
   echo "[ERROR] credential_mode must be 'auto' or 'manual'."
@@ -852,6 +1126,16 @@ for ((p=START_PORT; p<=END_PORT; p++)); do
   fi
 done
 
+if [[ -f "$DB_FILE" ]]; then
+  for ((p=START_PORT; p<=END_PORT; p++)); do
+    if awk -F'|' -v port="$p" '$3==port{found=1} END{exit !found}' "$DB_FILE"; then
+      echo "[ERROR] Port already exists in DB: $p"
+      echo "[ERROR] Use a different port range or remove conflicting users first."
+      exit 1
+    fi
+  done
+fi
+
 TMP_CFG="$(mktemp)"
 
 if [[ "$PROTOCOL" == "http" ]]; then
@@ -875,6 +1159,10 @@ fi
 OUTBOUND_BIND_OPT=""
 EXTERNAL_LINE=""
 EXTERNAL_IP=""
+
+if [[ -z "$HOST_DISPLAY" && -f "$SETTINGS_FILE" ]]; then
+  HOST_DISPLAY="$(bash -c 'set -euo pipefail; source "$1"; printf %s "${DISTRIBUTION_HOST:-}"' _ "$SETTINGS_FILE" 2>/dev/null || true)"
+fi
 
 if [[ -n "$EXPIRE_DAYS" ]]; then
   if ! [[ "$EXPIRE_DAYS" =~ ^[0-9]+$ ]] || [[ "$EXPIRE_DAYS" -le 0 ]]; then
@@ -971,6 +1259,10 @@ if [[ "$HARDEN_OS" == "1" ]]; then
 fi
 
 mkdir -p "$CFG_DIR"
+mkdir -p "$LOG_DIR"
+touch "$LOG_FILE"
+chmod 700 "$LOG_DIR"
+chmod 600 "$LOG_FILE"
 
 if [[ -f "$CFG_FILE" ]]; then
   BACKUP_FILE="$CFG_FILE.bak.$(date +%Y%m%d_%H%M%S)"
@@ -998,6 +1290,8 @@ render_config_from_db() {
   {
     echo "daemon"
     echo "maxconn 2000"
+    echo "log ${LOG_FILE} D"
+    echo "rotate 30"
     echo "nserver 1.1.1.1/tcp"
     echo "nserver 8.8.8.8/tcp"
     echo "nserver 9.9.9.9/tcp"
@@ -1059,13 +1353,31 @@ render_config_from_db() {
 }
 
 USER_LINE="users "
-: > "$OUTPUT_CREDENTIALS"
-: > "$OUTPUT_LIST"
-: > "$DB_FILE"
+
+if [[ ! -f "$DB_FILE" ]]; then
+  : > "$DB_FILE"
+fi
+chmod 600 "$DB_FILE"
 
 declare -a USERNAMES
 declare -a PASSWORDS
 declare -A SEEN_USERNAMES
+AUTO_INDEX=1
+
+while IFS='|' read -r existing_username _existing_password _existing_port _existing_expires _existing_status _existing_protocol _existing_max_ips _existing_action; do
+  [[ -z "${existing_username:-}" ]] && continue
+  SEEN_USERNAMES["$existing_username"]=1
+done < "$DB_FILE"
+
+if [[ "$CREDENTIAL_MODE" == "auto" ]]; then
+  while true; do
+    candidate_username="${USER_PREFIX}$(printf '%03d' "$AUTO_INDEX")"
+    if [[ -z "${SEEN_USERNAMES[$candidate_username]:-}" ]]; then
+      break
+    fi
+    AUTO_INDEX=$((AUTO_INDEX + 1))
+  done
+fi
 
 for ((i=0; i<PROXY_COUNT; i++)); do
   PORT=$((START_PORT + i))
@@ -1081,7 +1393,7 @@ for ((i=0; i<PROXY_COUNT; i++)); do
         continue
       fi
       if [[ -n "${SEEN_USERNAMES[$USERNAME]:-}" ]]; then
-        echo "[WARN] Username already used in this batch. Use a unique one."
+        echo "[WARN] Username already exists. Use a unique one."
         continue
       fi
       SEEN_USERNAMES[$USERNAME]=1
@@ -1109,15 +1421,20 @@ for ((i=0; i<PROXY_COUNT; i++)); do
       break
     done
   else
-    USERNAME="${USER_PREFIX}$(printf '%03d' $((i + 1)))"
+    while true; do
+      USERNAME="${USER_PREFIX}$(printf '%03d' "$AUTO_INDEX")"
+      AUTO_INDEX=$((AUTO_INDEX + 1))
+      if [[ -z "${SEEN_USERNAMES[$USERNAME]:-}" ]]; then
+        SEEN_USERNAMES[$USERNAME]=1
+        break
+      fi
+    done
     PASSWORD="$(openssl rand -hex 6)"
   fi
 
   USERNAMES[$i]="$USERNAME"
   PASSWORDS[$i]="$PASSWORD"
 
-  echo "${USERNAME}:${PASSWORD}:${PORT}" >> "$OUTPUT_CREDENTIALS"
-  echo "${URI_SCHEME}://${USERNAME}:${PASSWORD}@${PUBLIC_IP}:${PORT}" >> "$OUTPUT_LIST"
   echo "${USERNAME}|${PASSWORD}|${PORT}|${EXPIRES_EPOCH_GLOBAL}|active|${PROTOCOL_LABEL}|${MAX_CLIENT_IPS}|${MAX_CLIENT_IPS_ACTION}" >> "$DB_FILE"
 
 done
@@ -1127,10 +1444,12 @@ done
   printf "WHITELIST=%q\n" "$WHITELIST"
   printf "OUTBOUND_BIND_OPT=%q\n" "$OUTBOUND_BIND_OPT"
   printf "EXTERNAL_IP=%q\n" "$EXTERNAL_IP"
+  printf "DISTRIBUTION_HOST=%q\n" "$HOST_DISPLAY"
 } > "$SETTINGS_FILE"
 chmod 600 "$SETTINGS_FILE"
 
 render_config_from_db "$DB_FILE" "$SETTINGS_FILE" "$CFG_FILE"
+regenerate_exports_from_db
 
 cat > "$EXPIRY_CHECK_SCRIPT" <<'EOF'
 #!/usr/bin/env bash
@@ -1197,6 +1516,8 @@ render_config_from_db() {
   {
     echo "daemon"
     echo "maxconn 2000"
+    echo "log /var/log/3proxy/3proxy.log D"
+    echo "rotate 30"
     echo "nserver 1.1.1.1/tcp"
     echo "nserver 8.8.8.8/tcp"
     echo "nserver 9.9.9.9/tcp"
@@ -1384,7 +1705,12 @@ echo "Credentials file:  ${OUTPUT_CREDENTIALS}"
 echo "Proxy list file:   ${OUTPUT_LIST}"
 echo "Proxy DB file:     ${DB_FILE}"
 echo
-echo "Format in ${OUTPUT_LIST}: ${URI_SCHEME}://USERNAME:PASSWORD@IP:PORT"
+if [[ -n "$HOST_DISPLAY" ]]; then
+  echo "Distribution host: ${HOST_DISPLAY}"
+  echo "Format in ${OUTPUT_LIST}: ${URI_SCHEME}://USERNAME:PASSWORD@${HOST_DISPLAY}:PORT"
+else
+  echo "Format in ${OUTPUT_LIST}: ${URI_SCHEME}://USERNAME:PASSWORD@IP_OR_DOMAIN:PORT"
+fi
 if [[ "$PROTOCOL" == "socks5" ]]; then
   echo "[INFO] SOCKS URIs use socks5h:// to route DNS through proxy."
 fi

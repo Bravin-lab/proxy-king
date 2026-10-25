@@ -14,16 +14,10 @@ if [[ ! -f "$SETUP_SCRIPT" ]]; then
   exit 1
 fi
 
-if ! command -v whiptail >/dev/null 2>&1; then
-  echo "[INFO] Installing whiptail..."
-  apt-get update -y >/dev/null
-  apt-get install -y whiptail >/dev/null
-fi
-
 run_setup() {
   local cmd=("$SETUP_SCRIPT" "$@")
 
-  clear
+  echo
   echo "Running: bash ${cmd[*]}"
   echo
   if bash "${cmd[@]}"; then
@@ -34,73 +28,132 @@ run_setup() {
     echo "[ERROR] Command failed."
   fi
   echo
-  read -r -p "Press Enter to continue..." _
+  read -r -p "Press Enter to continue..." _pause
 }
 
-ask_input() {
-  local title="$1"
-  local prompt="$2"
-  local default_val="$3"
-  whiptail --title "$title" --inputbox "$prompt" 12 70 "$default_val" 3>&1 1>&2 2>&3
+prompt_input() {
+  local prompt="$1"
+  local default_val="${2:-}"
+  local value=""
+
+  if [[ -n "$default_val" ]]; then
+    read -r -p "$prompt [$default_val]: " value
+    if [[ -z "$value" ]]; then
+      value="$default_val"
+    fi
+  else
+    read -r -p "$prompt: " value
+  fi
+
+  printf '%s' "$value"
 }
 
-ask_menu() {
-  local title="$1"
-  local prompt="$2"
-  shift 2
-  whiptail --title "$title" --menu "$prompt" 20 78 10 "$@" 3>&1 1>&2 2>&3
+pause_screen() {
+  echo
+  read -r -p "Press Enter to continue..." _pause
+}
+
+choose_protocol() {
+  local choice
+  while true; do
+    echo >&2
+    echo "Select protocol:" >&2
+    echo "1) http" >&2
+    echo "2) socks5" >&2
+    read -r -p "Choice [1]: " choice
+    case "${choice:-1}" in
+      1) echo "http"; return ;;
+      2) echo "socks5"; return ;;
+      *) echo "[WARN] Invalid choice." >&2 ;;
+    esac
+  done
+}
+
+choose_expiry_mode() {
+  local choice
+  while true; do
+    echo >&2
+    echo "Select expiration mode:" >&2
+    echo "1) none" >&2
+    echo "2) days" >&2
+    echo "3) at (absolute date/time)" >&2
+    read -r -p "Choice [1]: " choice
+    case "${choice:-1}" in
+      1) echo "none"; return ;;
+      2) echo "days"; return ;;
+      3) echo "at"; return ;;
+      *) echo "[WARN] Invalid choice." >&2 ;;
+    esac
+  done
+}
+
+choose_max_ips_action() {
+  local choice
+  while true; do
+    echo >&2
+    echo "On max client IP limit breach:" >&2
+    echo "1) delete" >&2
+    echo "2) pause" >&2
+    read -r -p "Choice [1]: " choice
+    case "${choice:-1}" in
+      1) echo "delete"; return ;;
+      2) echo "pause"; return ;;
+      *) echo "[WARN] Invalid choice." >&2 ;;
+    esac
+  done
 }
 
 create_proxies_flow() {
-  local count start_port user_prefix protocol whitelist cred_mode
+  local count start_port user_prefix protocol whitelist cred_mode distribution_host
   local expire_mode expire_days expires_at max_client_ips max_client_ips_action
   local harden="no" keep_ipv6="no"
   local cmd_args=()
 
-  count="$(ask_input "Create Proxies" "Proxy count" "20")" || return
-  start_port="$(ask_input "Create Proxies" "Start port" "10000")" || return
-  user_prefix="$(ask_input "Create Proxies" "Username prefix" "user")" || return
+  echo
+  echo "=== Create Proxies ==="
 
-  protocol="$(ask_menu "Create Proxies" "Protocol" \
-    "http" "HTTP proxy" \
-    "socks5" "SOCKS5 proxy")" || return
+  count="$(prompt_input "Proxy count" "20")"
+  start_port="$(prompt_input "Start port" "10000")"
+  user_prefix="$(prompt_input "Username prefix" "user")"
+  protocol="$(choose_protocol)"
+  whitelist="$(prompt_input "Source whitelist (*, IP, CIDR, comma-separated)" "*")"
+  distribution_host="$(prompt_input "Distribution host/domain (blank = auto server IP)" "")"
 
-  whitelist="$(ask_input "Create Proxies" "Source whitelist (*, IP, CIDR, or comma-separated)" "*")" || return
+  while true; do
+    cred_mode="$(prompt_input "Credential mode (auto/manual)" "auto")"
+    cred_mode="$(printf '%s' "$cred_mode" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$cred_mode" == "auto" || "$cred_mode" == "manual" ]]; then
+      break
+    fi
+    echo "[WARN] Enter auto or manual."
+  done
 
-  cred_mode="$(ask_menu "Create Proxies" "Credential mode" \
-    "auto" "Auto-generate users/passwords" \
-    "manual" "Prompt per user/password")" || return
-
-  max_client_ips="$(ask_input "Create Proxies" "Max unique client IPs per account (0 = unlimited)" "0")" || return
-
-  max_client_ips_action="$(ask_menu "Create Proxies" "On limit breach (max-client-ips-action)" \
-    "delete" "Delete account" \
-    "pause" "Pause account")" || return
-
-  expire_mode="$(ask_menu "Create Proxies" "Expiration mode" \
-    "none" "No expiry" \
-    "days" "Expire after N days" \
-    "at" "Expire at date/time")" || return
+  max_client_ips="$(prompt_input "Max unique client IPs per account (0=unlimited)" "0")"
+  max_client_ips_action="$(choose_max_ips_action)"
+  expire_mode="$(choose_expiry_mode)"
 
   expire_days=""
   expires_at=""
   case "$expire_mode" in
     days)
-      expire_days="$(ask_input "Create Proxies" "Expire after how many days?" "7")" || return
+      expire_days="$(prompt_input "Expire after how many days" "7")"
       ;;
     at)
-      expires_at="$(ask_input "Create Proxies" "Expires at (e.g. 2026-03-31 23:59:59)" "")" || return
+      expires_at="$(prompt_input "Expires at (e.g. 2026-03-31 23:59:59)" "")"
       ;;
   esac
 
-  if whiptail --title "Create Proxies" --yesno "Enable OS hardening?" 10 60; then
+  if [[ "$(prompt_input "Enable OS hardening? (y/N)" "n")" =~ ^[Yy]$ ]]; then
     harden="yes"
-    if whiptail --title "Create Proxies" --yesno "Keep IPv6 enabled?" 10 60; then
+    if [[ "$(prompt_input "Keep IPv6 enabled? (y/N)" "n")" =~ ^[Yy]$ ]]; then
       keep_ipv6="yes"
     fi
   fi
 
   cmd_args=("$count" "$start_port" "$user_prefix" "$protocol" "$whitelist" "$cred_mode")
+  if [[ -n "$distribution_host" ]]; then
+    cmd_args+=("--host" "$distribution_host")
+  fi
   if [[ -n "$expire_days" ]]; then
     cmd_args+=("--expire-days" "$expire_days")
   fi
@@ -125,34 +178,33 @@ add_user_flow() {
   local port username password protocol expire_mode expire_days expires_at max_client_ips max_client_ips_action
   local cmd_args=()
 
-  port="$(ask_input "Add User" "Port" "12050")" || return
-  username="$(ask_input "Add User" "Username" "team01")" || return
-  password="$(ask_input "Add User" "Password (leave blank to auto-generate)" "")" || return
+  echo
+  echo "=== Add User ==="
+  port="$(prompt_input "Port" "12050")"
+  username="$(prompt_input "Username" "team01")"
+  password="$(prompt_input "Password (blank = auto-generate)" "")"
 
-  protocol="$(ask_menu "Add User" "Protocol" \
-    "auto" "Use current default protocol" \
-    "http" "HTTP" \
-    "socks5" "SOCKS5")" || return
+  while true; do
+    protocol="$(prompt_input "Protocol (auto/http/socks5)" "auto")"
+    protocol="$(printf '%s' "$protocol" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$protocol" == "auto" || "$protocol" == "http" || "$protocol" == "socks5" ]]; then
+      break
+    fi
+    echo "[WARN] Enter auto, http, or socks5."
+  done
 
-  max_client_ips="$(ask_input "Add User" "Max unique client IPs (0 = unlimited)" "0")" || return
-
-  max_client_ips_action="$(ask_menu "Add User" "On limit breach (max-client-ips-action)" \
-    "delete" "Delete account" \
-    "pause" "Pause account")" || return
-
-  expire_mode="$(ask_menu "Add User" "Expiration mode" \
-    "none" "No expiry" \
-    "days" "Expire after N days" \
-    "at" "Expire at date/time")" || return
+  max_client_ips="$(prompt_input "Max unique client IPs (0=unlimited)" "0")"
+  max_client_ips_action="$(choose_max_ips_action)"
+  expire_mode="$(choose_expiry_mode)"
 
   expire_days=""
   expires_at=""
   case "$expire_mode" in
     days)
-      expire_days="$(ask_input "Add User" "Expire after how many days?" "7")" || return
+      expire_days="$(prompt_input "Expire after how many days" "7")"
       ;;
     at)
-      expires_at="$(ask_input "Add User" "Expires at (e.g. 2026-03-31 23:59:59)" "")" || return
+      expires_at="$(prompt_input "Expires at (e.g. 2026-03-31 23:59:59)" "")"
       ;;
   esac
 
@@ -180,26 +232,36 @@ add_user_flow() {
 reactivate_or_resume_flow() {
   local mode username use_new_expiry="no" expiry_type days at
 
-  mode="$(ask_menu "Resume/Reactivate" "Choose action" \
-    "resume" "Resume user" \
-    "reactivate" "Reactivate user")" || return
+  echo
+  echo "=== Resume/Reactivate User ==="
 
-  username="$(ask_input "Resume/Reactivate" "Username" "user001")" || return
+  while true; do
+    mode="$(prompt_input "Action (resume/reactivate)" "resume")"
+    mode="$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$mode" == "resume" || "$mode" == "reactivate" ]]; then
+      break
+    fi
+    echo "[WARN] Enter resume or reactivate."
+  done
 
-  if whiptail --title "Resume/Reactivate" --yesno "Set a new expiry?" 10 60; then
+  username="$(prompt_input "Username" "user001")"
+
+  if [[ "$(prompt_input "Set a new expiry? (y/N)" "n")" =~ ^[Yy]$ ]]; then
     use_new_expiry="yes"
   fi
 
   if [[ "$mode" == "resume" ]]; then
     if [[ "$use_new_expiry" == "yes" ]]; then
-      expiry_type="$(ask_menu "New Expiry" "Select mode" \
-        "days" "Expire after N days" \
-        "at" "Expire at date/time")" || return
+      expiry_type="$(choose_expiry_mode)"
+      if [[ "$expiry_type" == "none" ]]; then
+        run_setup --resume-user "$username"
+        return
+      fi
       if [[ "$expiry_type" == "days" ]]; then
-        days="$(ask_input "New Expiry" "Days" "7")" || return
+        days="$(prompt_input "Days" "7")"
         run_setup --resume-user "$username" --new-expire-days "$days"
       else
-        at="$(ask_input "New Expiry" "Date/time" "2026-03-31 23:59:59")" || return
+        at="$(prompt_input "Date/time" "2026-03-31 23:59:59")"
         run_setup --resume-user "$username" --new-expires-at "$at"
       fi
     else
@@ -207,14 +269,16 @@ reactivate_or_resume_flow() {
     fi
   else
     if [[ "$use_new_expiry" == "yes" ]]; then
-      expiry_type="$(ask_menu "New Expiry" "Select mode" \
-        "days" "Expire after N days" \
-        "at" "Expire at date/time")" || return
+      expiry_type="$(choose_expiry_mode)"
+      if [[ "$expiry_type" == "none" ]]; then
+        run_setup --reactivate-user "$username"
+        return
+      fi
       if [[ "$expiry_type" == "days" ]]; then
-        days="$(ask_input "New Expiry" "Days" "7")" || return
+        days="$(prompt_input "Days" "7")"
         run_setup --reactivate-user "$username" --new-expire-days "$days"
       else
-        at="$(ask_input "New Expiry" "Date/time" "2026-03-31 23:59:59")" || return
+        at="$(prompt_input "Date/time" "2026-03-31 23:59:59")"
         run_setup --reactivate-user "$username" --new-expires-at "$at"
       fi
     else
@@ -225,22 +289,32 @@ reactivate_or_resume_flow() {
 
 rotate_passwords_flow() {
   local scope username
-  scope="$(ask_menu "Rotate Passwords" "Scope" \
-    "all" "Rotate all users" \
-    "one" "Rotate one user")" || return
+
+  echo
+  echo "=== Rotate Passwords ==="
+  while true; do
+    scope="$(prompt_input "Scope (all/one)" "all")"
+    scope="$(printf '%s' "$scope" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$scope" == "all" || "$scope" == "one" ]]; then
+      break
+    fi
+    echo "[WARN] Enter all or one."
+  done
 
   if [[ "$scope" == "all" ]]; then
     run_setup --rotate-passwords
   else
-    username="$(ask_input "Rotate Passwords" "Username" "user001")" || return
+    username="$(prompt_input "Username" "user001")"
     run_setup --rotate-passwords --user "$username"
   fi
 }
 
 port_check_flow() {
   local start_port count
-  start_port="$(ask_input "Port Range Check" "Start port" "10000")" || return
-  count="$(ask_input "Port Range Check" "Count" "20")" || return
+  echo
+  echo "=== Port Range Check ==="
+  start_port="$(prompt_input "Start port" "10000")"
+  count="$(prompt_input "Count" "20")"
   run_setup --port-range-check "$start_port" "$count"
 }
 
@@ -248,11 +322,54 @@ health_check_flow() {
   run_setup --health-check
 }
 
+alive_accounts_flow() {
+  run_setup --list-alive
+}
+
+set_distribution_host_flow() {
+  local host
+  echo
+  echo "=== Set Distribution Host ==="
+  host="$(prompt_input "Domain or IP (example: proxy.example.com)" "")"
+  if [[ -z "$host" ]]; then
+    echo "[WARN] Host cannot be empty."
+    pause_screen
+    return
+  fi
+  run_setup --set-host "$host"
+}
+
+apply_hardening_now_flow() {
+  local keep_ipv6
+  echo
+  echo "=== Apply Security Hardening ==="
+  keep_ipv6="$(prompt_input "Keep IPv6 enabled? (y/N)" "n")"
+  if [[ "$keep_ipv6" =~ ^[Yy]$ ]]; then
+    run_setup --harden-now --keep-ipv6
+  else
+    run_setup --harden-now
+  fi
+}
+
+run_security_audit_flow() {
+  echo
+  echo "=== Security Audit ==="
+  run_setup --security-audit
+}
+
 list_flow() {
-  local which
-  which="$(ask_menu "List Users" "Select list" \
-    "active" "Active users" \
-    "expired" "Expired users")" || return
+  local which=""
+
+  echo
+  echo "=== List Users ==="
+  while true; do
+    which="$(prompt_input "Which list (active/expired)" "active")"
+    which="$(printf '%s' "$which" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$which" == "active" || "$which" == "expired" ]]; then
+      break
+    fi
+    echo "[WARN] Enter active or expired."
+  done
 
   if [[ "$which" == "active" ]]; then
     run_setup --list-active
@@ -265,22 +382,37 @@ simple_user_action() {
   local action="$1"
   local title="$2"
   local username
-  username="$(ask_input "$title" "Username" "user001")" || return
+  echo
+  echo "=== $title ==="
+  username="$(prompt_input "Username" "user001")"
   run_setup "$action" "$username"
 }
 
+show_main_menu() {
+  clear
+  echo "==============================================="
+  echo " Proxy Manager - CLI Menu"
+  echo "==============================================="
+  echo "1) Create proxies"
+  echo "2) List users (active/expired)"
+  echo "3) Add user (incremental)"
+  echo "4) Rotate passwords"
+  echo "5) Pause user"
+  echo "6) Resume/Reactivate user"
+  echo "7) Delete user"
+  echo "8) Port range check"
+  echo "9) Health check"
+  echo "10) Show alive accounts"
+  echo "11) Set distribution host/domain"
+  echo "12) Apply security hardening now"
+  echo "13) Run security audit"
+  echo "0) Exit"
+  echo
+}
+
 while true; do
-  action="$(ask_menu "Proxy Manager UI" "Choose an action" \
-    "1" "Create proxies" \
-    "2" "List users (active/expired)" \
-    "3" "Add user (incremental)" \
-    "4" "Rotate passwords" \
-    "5" "Pause user" \
-    "6" "Resume/Reactivate user" \
-    "7" "Delete user" \
-    "8" "Port range check" \
-    "9" "Health check" \
-    "0" "Exit")" || break
+  show_main_menu
+  read -r -p "Select option [0-13]: " action
 
   case "$action" in
     1) create_proxies_flow ;;
@@ -292,7 +424,15 @@ while true; do
     7) simple_user_action "--delete-user" "Delete User" ;;
     8) port_check_flow ;;
     9) health_check_flow ;;
+    10) alive_accounts_flow ;;
+    11) set_distribution_host_flow ;;
+    12) apply_hardening_now_flow ;;
+    13) run_security_audit_flow ;;
     0) break ;;
+    *)
+      echo "[WARN] Invalid menu option."
+      pause_screen
+      ;;
   esac
 done
 
