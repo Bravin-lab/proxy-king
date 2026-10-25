@@ -21,23 +21,38 @@ This project is designed for operators who want a practical proxy lifecycle work
 - `telegram_bot.sh`: Telegram bot runner (long polling)
 - `install_telegram_bot.sh`: installer for Telegram bot systemd service
 
-## Quick Start
+## Installation (Fresh Ubuntu VPS)
+
+Follow these steps in order on a new server.
+
+1. Point domain DNS to your VPS (recommended before proxy creation).
+
+- Create an `A` record for your proxy host (example: `proxy.example.com`) to your VPS public IPv4.
+- If using Cloudflare for standard proxy ports, keep the record as **DNS only** (not proxied/orange-cloud).
+
+2. Prepare the server and clone project.
 
 ```bash
 sudo apt update
-sudo apt install build-essential openssl libssl-dev -y
+sudo apt install -y git build-essential openssl libssl-dev
 git clone https://github.com/Bravin-lab/proxy-king
-cd "proxy-king"
+cd proxy-king
 chmod +x setup_3proxy.sh proxy_ui.sh
 ```
 
-Create 20 SOCKS5 proxies starting from port `10000`:
+3. (Optional) Verify intended port range is free.
 
 ```bash
-sudo bash setup_3proxy.sh 20 10000 user socks5 "*" auto --host proxy.example.com
+sudo bash setup_3proxy.sh --port-range-check 10000 20
 ```
 
-Run interactive terminal UI:
+4. Create first proxy batch.
+
+```bash
+sudo bash setup_3proxy.sh 20 10000 user socks5 "*" auto --host proxy.example.com --harden-os
+```
+
+5. Install and use interactive menu command.
 
 ```bash
 sudo bash setup_3proxy.sh --install-menu
@@ -46,7 +61,15 @@ menu
 
 `menu` is installed to `/usr/local/bin/menu` and can be run from any directory.
 It opens a loop-style terminal menu (numbered options) without `whiptail`.
-If you run `setup_3proxy.sh` for other operations first, it will auto-install/update `menu` as well.
+
+6. Verify service and security status.
+
+```bash
+sudo systemctl status 3proxy --no-pager
+sudo systemctl status 3proxy-expiry-check.timer --no-pager
+sudo bash setup_3proxy.sh --health-check
+sudo bash setup_3proxy.sh --security-audit
+```
 
 ## Telegram Bot Control
 
@@ -115,8 +138,8 @@ Use this exact flow on a fresh Ubuntu VPS.
 1. Clone repository and set executable permissions.
 
 ```bash
-git clone <your-repo-url>
-cd "proxy script"
+git clone https://github.com/Bravin-lab/proxy-king
+cd proxy-king
 chmod +x setup_3proxy.sh proxy_ui.sh
 ```
 
